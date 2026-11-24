@@ -71,6 +71,13 @@ internal sealed class TrayIcon : IDisposable
     public void SetReceiving(bool on) =>
         icon.Text = on ? "DropLink - 正在接收" : "DropLink - 隔空投送接收器";
 
+    /// <summary>A background receiver reports problems here instead of a modal box.</summary>
+    public void Notify(string title, string text)
+    {
+        try { icon.ShowBalloonTip(5000, title, text, Forms.ToolTipIcon.Warning); }
+        catch (Exception) { /* balloons are best-effort */ }
+    }
+
     private static Icon LoadIcon()
     {
         // Prefer the embedded multi-size icon so the tray gets a crisp 16x16.

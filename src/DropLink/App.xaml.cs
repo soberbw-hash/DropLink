@@ -78,9 +78,18 @@ public partial class App : System.Windows.Application
 
         base.OnStartup(e);
 
-        var window = new MainWindow();
+        var window = new MainWindow { BackgroundMode = StartMinimized };
         MainWindow = window;
-        if (!StartMinimized) window.Show();
+        if (StartMinimized)
+        {
+            // The window is never shown, so Loaded never fires: kick the guide
+            // and the receiver off explicitly or a tray-only launch does nothing.
+            _ = window.InitializeAsync();
+        }
+        else
+        {
+            window.Show();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

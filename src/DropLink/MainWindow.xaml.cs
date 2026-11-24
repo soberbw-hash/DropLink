@@ -17,12 +17,15 @@ public partial class MainWindow : Window
     // Transient status ("正在初始化网卡…") lives on the progress line, not in the
     // details box, so the details box can stay collapsed until the user asks.
     private bool transientProgress;
+    private bool initialized;
+    // True when the process was launched with --tray by the logon task: the
+    // window stays hidden, so the receiver has to start itself.
+    internal bool BackgroundMode { get; set; }
     public MainWindow()
     {
         InitializeComponent();
         // Auto-check on launch so the guide is useful the moment the window opens.
-        Loaded += async (_, _) => await CheckReadinessAsync();
-        Loaded += (_, _) => EnsureTray();
+        Loaded += async (_, _) => await InitializeAsync();
         StateChanged += OnStateChanged;
         Closing += OnClosing;
         Closed += async (_, _) => await CloseSessionAsync();
@@ -30,6 +33,30 @@ public partial class MainWindow : Window
         System.Windows.Application.Current.SessionEnding += (_, _) => exitRequested = true;
         // Create the tray before the first Show so autostart can stay hidden.
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
+    }
+
+    // Runs once whether the window is shown or not. A tray-only launch calls
+    // this from App because Loaded never fires for a window that never shows.
+    internal async Task InitializeAsync()
+    {
+        if (initialized) return;
+        initialized = true;
+        try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
+        await CheckReadinessAsync();
+        if (!BackgroundMode || session is not null) return;
+        // At logon the USB card may not be enumerated yet, so give it a bounded
+        // window to show up instead of failing the whole background start once.
+        for (var attempt = 0; attempt < 3 && session is null; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(20));
+                await CheckReadinessAsync();
+            }
+            if (currentStep != GuideStep.StartReceiving) continue;
+            // Logon start is meant to be hands-off: come up already receiving.
+            await StartReceiveAsync(silent: true);
+        }
     }
 
     private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit);
@@ -110,7 +137,10 @@ public partial class MainWindow : Window
     private void OnSessionFailed(string message) =>
         _ = Dispatcher.BeginInvoke(async () =>
         {
-            MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning);
+            // A background receiver has no visible window to point at; a modal
+            // box at logon would be worse than a tray notice.
+            if (!IsVisible) tray?.Notify("DropLink 接收链路异常", message);
+            else MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning);
             try { await CloseSessionAsync(); await CheckReadinessAsync(); }
             catch (Exception) { /* refresh is best-effort */ }
         });
@@ -282,9 +312,11 @@ public partial class MainWindow : Window
         DetailsToggle.Content = "收起";
     }
 
+    private async void StartReceive_Click(object sender, RoutedEventArgs e) => await StartReceiveAsync(silent: false);
+
     // Even when enabled, starting still goes through ReceiverSession ->
     // BackendChain, whose ValidatedTargetSelection() safety lock stays closed.
-    private async void StartReceive_Click(object sender, RoutedEventArgs e)
+    private async Task StartReceiveAsync(bool silent)
     {
         // The radio needs ~45 s of firmware + RF init before the chain is up,
         // so say so instead of appearing frozen.
@@ -320,6 +352,9 @@ public partial class MainWindow : Window
             var reason = "启动失败：" + ex.Message;
             await CheckReadinessAsync(); // back to step 2 so the button works again
             ShowDetails(reason, expand: true); // keep the reason visible after the refresh
+            // A hidden receiver must not open a modal box at logon; the tray is
+            // the only thing the user can see, so report it there.
+            if (silent) tray?.Notify("DropLink 没能开始接收", ex.Message);
         }
     }
 
