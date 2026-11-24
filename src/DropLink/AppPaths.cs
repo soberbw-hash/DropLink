@@ -52,6 +52,51 @@ internal static class AppPaths
         return Path.Combine(PortableRoot(), "data");
     }
 
+    /// <summary>
+    /// True when the app found its own backend folder next to the exe, i.e. it
+    /// is the portable package. Everything the package owns lives inside that
+    /// folder; anything else is an ordinary install and must not write next to
+    /// its own executable (Program Files is not writable).
+    /// </summary>
+    public static bool IsPortable()
+    {
+        var exe = Environment.ProcessPath;
+        var start = new DirectoryInfo(string.IsNullOrWhiteSpace(exe)
+            ? AppContext.BaseDirectory
+            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory);
+        for (var d = start; d is not null; d = d.Parent)
+        {
+            if (File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe"))) return true;
+            if (Directory.Exists(Path.Combine(d.FullName, "prepared-next"))) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The real Downloads folder, via the shell's known-folder API. The folder
+    /// can be moved or redirected (OneDrive), so guessing %USERPROFILE%\Downloads
+    /// puts files somewhere the user will not look.
+    /// </summary>
+    public static string? DownloadsFolder()
+    {
+        var id = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out buffer) != 0) return null;
+            var path = System.Runtime.InteropServices.Marshal.PtrToStringUni(buffer);
+            return string.IsNullOrWhiteSpace(path) ? null : path;
+        }
+        catch (Exception) { return null; }
+        finally
+        {
+            if (buffer != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeCoTaskMem(buffer);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+
     public static void EnsureEnvironment(string? baseDir = null)
     {
         // Environment.ProcessPath is the real exe path; AppContext.BaseDirectory

@@ -110,9 +110,11 @@ public partial class SettingsWindow : Window
         else
         {
             // Say the state is unknown rather than showing a switch that may be
-            // the opposite of the truth.
+            // the opposite of the truth. The reason goes to the status line:
+            // a script path inside a row hint runs under the switch.
             AutostartSwitch.IsEnabled = false;
-            AutostartHint.Text = "读不到开机启动状态，开关暂时不可用：" + state.Output.Trim();
+            AutostartHint.Text = "读不到开机启动状态，这个开关暂时不可用。";
+            SetNote("开机启动状态读取失败：" + state.Output.Trim(), true);
         }
     }
 
@@ -257,7 +259,14 @@ public partial class SettingsWindow : Window
             {
                 var info = FileVersionInfo.GetVersionInfo(path);
                 var shown = info.ProductVersion ?? info.FileVersion;
-                if (!string.IsNullOrWhiteSpace(shown)) return "版本 " + shown.Trim();
+                // SourceLink appends the whole commit hash to ProductVersion.
+                // A 40-character hash is not a version number to a user.
+                if (!string.IsNullOrWhiteSpace(shown))
+                {
+                    var cut = shown.IndexOf('+');
+                    if (cut > 0) shown = shown[..cut];
+                    return "版本 " + shown.Trim();
+                }
             }
         }
         catch (Exception) { /* fall through to the assembly version */ }

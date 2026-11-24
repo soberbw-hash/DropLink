@@ -64,7 +64,8 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <StackPanel Grid.Column="0" Margin="0,0,20,0">
        <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}"/>
-       <TextBlock x:Name="AutostartHint" Text="登录 Windows 后在后台开始接收，不弹窗口、不弹 UAC。" Style="{StaticResource RowHint}"/>
+       <TextBlock x:Name="AutostartHint" Text="登录 Windows 后在后台开始接收，不弹窗口、不弹 UAC。" Style="{StaticResource RowHint}"
+                  TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="360"/>
       </StackPanel>
       <CheckBox x:Name="AutostartSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"
                 Checked="Autostart_Toggled" Unchecked="Autostart_Toggled"/>

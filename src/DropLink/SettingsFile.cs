@@ -86,6 +86,15 @@ internal static class SettingsFile
         }
         var env = Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR");
         if (!string.IsNullOrWhiteSpace(env)) return env;
-        return System.IO.Path.Combine(AppPaths.PortableRoot(), "data", "received");
+        // Portable package: everything it owns stays inside its own folder.
+        if (AppPaths.IsPortable())
+            return System.IO.Path.Combine(AppPaths.PortableRoot(), "data", "received");
+        // Ordinary install: received files belong in Downloads, where the user
+        // already looks for things they just got. Never next to the executable.
+        var downloads = AppPaths.DownloadsFolder();
+        if (!string.IsNullOrWhiteSpace(downloads))
+            return System.IO.Path.Combine(downloads, "DropLink");
+        return System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "DropLink");
     }
 }
