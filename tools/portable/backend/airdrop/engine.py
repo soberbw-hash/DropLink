@@ -143,6 +143,46 @@ def make_still_copies(folder, names):
         return []
 
 
+def toast_text(names, show_format=True):
+    """Title and optional second line for the completion toast.
+
+    One line is enough for the common case: the file name already carries the
+    format, so repeating it underneath ("电脑可查看：PNG") told the reader
+    nothing they could not see. A second line is only kept when it adds
+    something - several files, or a name whose extension does not reveal what
+    the PC will do with it (a Live Photo's *.pvt folder, or no extension).
+
+    Kept as a plain function so the wording can be tested without a desktop.
+    """
+    names = [str(n) for n in names]
+    count = len(names)
+    if count == 1:
+        title = 'DropLink 收到 ' + names[0]
+        body = ''
+    elif count > 1:
+        title = 'DropLink 收到 %d 个文件' % count
+        body = '、'.join(names[:3]) + (' 等' if count > 3 else '')
+    else:
+        title = 'DropLink 收到文件'
+        body = '已保存到接收文件夹'
+
+    if show_format and names:
+        try:
+            opaque = [n for n in names
+                      if os.path.splitext(n)[1].lower() in ('', '.pvt')]
+            # *.pvt is a container, not something the PC can open, so it is
+            # never reported as a format. What matters is the still copy.
+            suffixes = {os.path.splitext(n)[1].lstrip('.').upper() for n in names
+                        if os.path.splitext(n)[1].lower() != '.pvt'}
+            suffixes = {s for s in suffixes if s}
+            if opaque and suffixes:
+                line = '电脑可查看：' + ' '.join(sorted(suffixes))
+                body = (body + '\n' + line) if body else line
+        except Exception:
+            pass
+    return title, body
+
+
 def notify_received(folder, names):
     """Best-effort Windows toast on completion; never blocks or breaks reception."""
     def _run():
@@ -151,29 +191,13 @@ def notify_received(folder, names):
             script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'notify.ps1')
             if not os.path.exists(script):
                 return
-            count = len(names)
-            if count == 1:
-                title = 'DropLink 收到文件'
-            else:
-                title = 'DropLink 收到 %d 个文件' % count
-            if names:
-                label = names[0] if count == 1 else '%s 等 %d 个' % (names[0], count)
-            else:
-                label = '已保存到接收文件夹'
-            # Append what this PC can open, so a sender knows the format is
-            # usable here (Live Photos get a plain still copy separately).
-            try:
-                if load_settings().get('show_format_in_notification', True):
-                    # ".png" reads like a typo in a sentence; "PNG" reads like
-                    # a format. Same information, one less question.
-                    suffixes = {os.path.splitext(str(n))[1].lstrip('.').upper() for n in names}
-                    suffixes = {s for s in suffixes if s}
-                    if suffixes:
-                        label += '\n电脑可查看：' + ' '.join(sorted(suffixes))
-            except Exception:
-                pass
+            title, label = toast_text(names, load_settings().get(
+                'show_format_in_notification', True))
             def b64(text):
-                return base64.b64encode(str(text).encode('utf-8')).decode('ascii')
+                # PowerShell drops an empty argument outright, which would make
+                # -MessageB64 / -ImageB64 bind to nothing and kill the whole
+                # toast. '~' is the agreed stand-in for "empty".
+                return base64.b64encode(str(text).encode('utf-8')).decode('ascii') or '~'
             # Clipboard payload: the received file name(s), matching the
             # DropBridge-style "copy to clipboard" button in the toast.
             clip_text = '\n'.join(names) if names else ''

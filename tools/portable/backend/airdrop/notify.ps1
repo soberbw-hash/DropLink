@@ -3,12 +3,12 @@
 # Windows PowerShell 5.1 reads it correctly regardless of system codepage.
 param(
     [Parameter(Mandatory=$true)][string]$FolderB64,
-    [string]$TitleB64 = '',
-    [string]$MessageB64 = '',
-    [string]$ClipB64 = '',
-    [string]$OpenLabelB64 = '',
-    [string]$ClipLabelB64 = '',
-    [string]$ImageB64 = ''
+    [string]$TitleB64 = '~',
+    [string]$MessageB64 = '~',
+    [string]$ClipB64 = '~',
+    [string]$OpenLabelB64 = '~',
+    [string]$ClipLabelB64 = '~',
+    [string]$ImageB64 = '~'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -20,7 +20,11 @@ $Aumid = 'DropLink.Receiver'
 $FallbackAumid = 'Microsoft.Windows.Explorer'
 
 function From-B64([string]$s) {
-    if (-not $s) { return '' }
+    # PowerShell drops an empty argument from the command line entirely, so an
+    # empty string can never be passed in: '-MessageB64 ""' binds to nothing and
+    # the whole call fails. '~' is the agreed stand-in for "empty" (a bare
+    # '-' would be read as the start of another parameter name).
+    if (-not $s -or $s -eq '~') { return '' }
     try { return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($s)) }
     catch { return '' }
 }
@@ -148,7 +152,14 @@ try {
     $root.SetAttribute('duration', 'long')
     $texts = $doc.GetElementsByTagName('text')
     $texts.Item(0).InnerText = $title
-    $texts.Item(1).InnerText = $message
+    if ($message) {
+        $texts.Item(1).InnerText = $message
+    } else {
+        # An empty <text/> still reserves a blank line under the title. Drop
+        # the node so a one-line toast actually looks like one line.
+        $spare = $texts.Item(1)
+        $spare.ParentNode.RemoveChild($spare) | Out-Null
+    }
     # Optional inline preview image (e.g. the received photo). hint-crop=none
     # keeps the whole frame instead of centre-cropping it into a square.
     if ($imagePath) {
