@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 
 import identity
 import mdns
@@ -143,28 +144,69 @@ def make_still_copies(folder, names):
         return []
 
 
+# How much text fits on one toast line. Measured against the real toast on
+# Windows 11 at 100%: about 38 columns, where a CJK character costs two.
+TOAST_LINE_WIDTH = 38
+
+
+def _toast_width(text):
+    return sum(2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+               for ch in text)
+
+
+def fit_name(name, limit=TOAST_LINE_WIDTH):
+    """Shorten a file name to one toast line, keeping the extension intact.
+
+    The shell wraps a long <text> element instead of clipping it, and a wrapped
+    file name reads as two unrelated lines. Cutting the *stem* keeps the useful
+    part - "81FA1FEE-A0D6-4CB0-B930-D25D8B52….PNG" still says what the file is,
+    while "…D25D8B52E7F6.PNG" says nothing at all.
+    """
+    name = str(name)
+    if _toast_width(name) <= limit:
+        return name
+    stem, ext = os.path.splitext(name)
+    room = limit - _toast_width(ext) - 1  # one column for the ellipsis
+    if room <= 0:
+        return '…' + ext
+    kept = ''
+    used = 0
+    for ch in stem:
+        width = 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        if used + width > room:
+            break
+        kept += ch
+        used += width
+    return kept + '…' + ext
+
+
 def toast_text(names, show_format=True):
     """Title and optional second line for the completion toast.
 
-    One line is enough for the common case: the file name already carries the
-    format, so repeating it underneath ("电脑可查看：PNG") told the reader
-    nothing they could not see. A second line is only kept when it adds
-    something - several files, or a name whose extension does not reveal what
-    the PC will do with it (a Live Photo's *.pvt folder, or no extension).
+    The notification already carries the app name in its header, so starting the
+    line with "DropLink 收到" only ate the space the file name needed. The name
+    itself is the whole message: one line, extension preserved.
+
+    A second line is kept only when it adds something a file name cannot show -
+    a Live Photo's *.pvt container, where the still copy is what the PC can open.
 
     Kept as a plain function so the wording can be tested without a desktop.
     """
     names = [str(n) for n in names]
     count = len(names)
     if count == 1:
-        title = 'DropLink 收到 ' + names[0]
+        title = fit_name(names[0])
         body = ''
     elif count > 1:
-        title = 'DropLink 收到 %d 个文件' % count
-        body = '、'.join(names[:3]) + (' 等' if count > 3 else '')
+        # The count prefix eats into the same line, so the name gets what is
+        # left of it - otherwise "2 个文件 · <38 columns>" wraps and the whole
+        # point of the one-line rule is lost.
+        prefix = '%d 个文件 · ' % count
+        title = prefix + fit_name(names[0], TOAST_LINE_WIDTH - _toast_width(prefix))
+        body = ''
     else:
-        title = 'DropLink 收到文件'
-        body = '已保存到接收文件夹'
+        title = '已保存到接收文件夹'
+        body = ''
 
     if show_format and names:
         try:
