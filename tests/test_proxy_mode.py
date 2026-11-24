@@ -5,6 +5,7 @@ import socket
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 
@@ -12,9 +13,32 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 AIR = pathlib.Path(os.environ.get('DROPLINK_AIRDROP_DIR', ROOT / '.prepared/winawdl/airdrop'))
 sys.path[:0] = [str(AIR), str(AIR / 'tests')]
 import engine
+import receiver
 import sender
 import transfer
 from test_engine import Heard
+
+
+class RejectedUploadTests(unittest.TestCase):
+    def test_expect_and_large_bodies_are_not_drained(self):
+        for headers in ({'Expect': '100-continue', 'Content-Length': '5'},
+                        {'Content-Length': '65537'}, {'Content-Length': 'invalid'}):
+            request = mock.Mock()
+            stream = mock.Mock()
+            handler = types.SimpleNamespace(headers=headers, request=request, rfile=stream, reject=mock.Mock())
+            receiver.Handler.reject_unread_upload(handler, 415, 'bad type')
+            handler.reject.assert_called_once_with(415, 'bad type')
+            stream.read1.assert_not_called()
+
+    def test_drain_has_deadline_and_restores_socket_timeout(self):
+        request = mock.Mock()
+        request.gettimeout.return_value = 17
+        stream = mock.Mock()
+        stream.read1.side_effect = TimeoutError()
+        handler = types.SimpleNamespace(headers={'Content-Length': '5'}, request=request, rfile=stream, reject=mock.Mock())
+        receiver.Handler.reject_unread_upload(handler, 401, 'not accepted')
+        request.settimeout.assert_any_call(17)
+        stream.read1.assert_called_once_with(5)
 
 
 class ProxyModeTests(unittest.TestCase):

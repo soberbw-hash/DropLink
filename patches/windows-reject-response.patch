@@ -1,0 +1,60 @@
+--- a/airdrop/receiver.py
++++ b/airdrop/receiver.py
+@@ -233,6 +233,39 @@
+         self.end_headers()
+         self.wfile.write(body)
+ 
++    def reject_unread_upload(self, status, reason):
++        """Send a rejection and briefly drain a small, already-sent body.
++
++        Windows can reset a TLS connection with unread data before the sender
++        receives the response. Never wait for an Expect: 100-continue body or
++        consume an unbounded upload; this connection will always close.
++        """
++        self.reject(status, reason)
++        if self.headers.get('Expect', '').lower() == '100-continue':
++            return
++        try:
++            length = int(self.headers.get('Content-Length', '0'))
++        except ValueError:
++            return
++        if not 0 < length <= 65536:
++            return
++        timeout = self.request.gettimeout()
++        deadline = time.monotonic() + 0.25
++        try:
++            while length:
++                remaining = deadline - time.monotonic()
++                if remaining <= 0:
++                    break
++                self.request.settimeout(remaining)
++                data = self.rfile.read1(min(length, 65536))
++                if not data:
++                    break
++                length -= len(data)
++        except (OSError, TimeoutError):
++            pass
++        finally:
++            self.request.settimeout(timeout)
++
+     def do_HEAD(self):
+         self.send_response(200)
+         self.send_header('Content-Length', '0')
+@@ -346,7 +379,7 @@
+         settings = self.server.settings
+         ctype = self.headers.get('Content-Type', '').split(';')[0].strip().lower()
+         if ctype not in UPLOAD_TYPES:
+-            self.reject(415, f'unsupported Content-Type {ctype!r}')
++            self.reject_unread_upload(415, f'unsupported Content-Type {ctype!r}')
+             return
+         if not transfer.UPLOAD_SLOTS.acquire(blocking=False):
+             self.reject(503, 'too many uploads in progress')
+@@ -357,7 +390,7 @@
+         self.accepted = None
+         if token is None:
+             transfer.UPLOAD_SLOTS.release()
+-            self.reject(DECLINED_STATUS, f'upload {tid} follows no accepted ask')
++            self.reject_unread_upload(DECLINED_STATUS, f'upload {tid} follows no accepted ask')
+             return
+         deadline = transfer.ReadDeadline()
+         plan = None

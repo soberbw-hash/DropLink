@@ -52,7 +52,8 @@ def main():
                         (dev, bridge / 'patches/devourer-airbridge.patch'),
                         (win, ROOT / 'patches/engine-default-directory.patch'),
                         (win, ROOT / 'patches/atomic-file-publish.patch'),
-                        (win, ROOT / 'patches/engine-proxy-mode.patch')):
+                        (win, ROOT / 'patches/engine-proxy-mode.patch'),
+                        (win, ROOT / 'patches/windows-reject-response.patch')):
         apply_patch(repo, patch, '--check')
         apply_patch(repo, patch)
     apply_patch(win, bridge / 'patches/airdrop-identity.patch', '--reverse', '--check')
