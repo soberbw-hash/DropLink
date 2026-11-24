@@ -12,6 +12,7 @@ Directory.CreateDirectory(temp);
 try
 {
     RadioPreflightChecks.Run(temp);
+    ReadinessReportChecks.Run(temp);
     UsbTopologyChecks.Run();
     await ReceiverSessionChecks.Run(temp);
     TransferStateChecks.Run();
