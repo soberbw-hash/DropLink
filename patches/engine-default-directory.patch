@@ -1,0 +1,11 @@
+--- a/airdrop/engine.py
++++ b/airdrop/engine.py
+@@ -626,7 +626,7 @@
+                         default=socket.gethostname().split('.')[0])
+     parser.add_argument('--model', type=receiver.valid_model, default=receiver.DEFAULT_MODEL)
+     parser.add_argument('--outdir', dest='dest', type=receiver.valid_dir,
+-                        default=receiver.valid_dir('~/Downloads'))
++                        default='~/Downloads')
+     parser.add_argument('--take-all', dest='ask', action='store_false',
+                         help='store what anyone sends without asking')
+     parser.add_argument('--max-receive-percent', type=receiver.valid_percent,

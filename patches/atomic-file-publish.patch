@@ -1,0 +1,70 @@
+--- a/airdrop/transfer.py
++++ b/airdrop/transfer.py
+@@ -610,27 +610,54 @@
+     return written
+ 
+ 
++def publish_staged(staging, dest, names):
++    """Publish complete files with no-replace hard links on the same volume.
++
++    Filesystems without hard-link support fail closed. A multi-file upload is
++    not a single atomic transaction; files already linked stay if a later link
++    fails, and the caller must report failure rather than success.
++    """
++    published = []
++    groups = {}
++    for item in names:
++        name = str(item)
++        source = os.path.join(staging, name)
++        # Flush completed file data before its final name is exposed.
++        with open(source, 'rb') as complete:
++            os.fsync(complete.fileno())
++        group = getattr(item, 'live_photo', None)
++        if group is not None:
++            if group not in groups:
++                groups[group] = free_number(dest, os.path.splitext(name)[0])
++            name = numbered(name, groups[group])
++        for number in range(MAX_NAME_ATTEMPTS):
++            candidate = numbered(name, number)
++            try:
++                # link() atomically creates a name and fails if it exists.
++                os.link(source, os.path.join(dest, candidate))
++            except FileExistsError:
++                continue
++            published.append(Stored(candidate, group))
++            break
++        else:
++            raise FileExistsError(name)
++    return published
++
++
+ def store_upload(raw, dest, tid, receive_budget):
+-    """Decode and extract regular files, removing every output on failure."""
+-    created = []
+-    try:
+-        with tempfile.TemporaryFile(dir=dest) as archive:
++    """Decode and validate the full archive before publishing complete files."""
++    with tempfile.TemporaryDirectory(prefix='.droplink-', dir=dest) as staging:
++        with tempfile.TemporaryFile(dir=staging) as archive:
+             raw.seek(0)
+             logging.debug('upload %s: body starts with %s', tid, raw.read(8).hex())
+             decoded = decode_dvzip(raw, archive, receive_budget.byte_limit, dest)
+-            # The wire copy is no longer needed. Release its blocks before the
+-            # extracted files begin consuming space.
+             raw.seek(0)
+             raw.truncate(0)
+             archive.seek(0)
+             logging.info('upload %s: decoded to %d bytes', tid, decoded)
+-            return _extract(archive, dest,
+-                            ExtractionBudget(receive_budget.byte_limit), created)
+-    except Exception:
+-        for name in reversed(created):
+-            with contextlib.suppress(FileNotFoundError):
+-                os.unlink(os.path.join(dest, name))
+-        raise
++            names = _extract(archive, staging,
++                             ExtractionBudget(receive_budget.byte_limit), [])
++        return publish_staged(staging, dest, names)
+ 
+ 
+ def is_web_link(item):
