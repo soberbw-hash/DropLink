@@ -173,7 +173,13 @@ try {
     try {
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show($toast)
     } catch {
-        # A machine that refuses the custom identity must still show something.
+        # A machine that refuses the custom identity must still show something,
+        # but the reason has to be visible or this fallback hides itself.
+        try {
+            [System.IO.File]::AppendAllText(
+                (Join-Path $PSScriptRoot 'notify-error.log'),
+                ("{0} aumid {1} rejected: {2}`n" -f (Get-Date -Format s), $Aumid, $_.Exception.Message))
+        } catch { }
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($FallbackAumid).Show($toast)
     }
 } catch {
