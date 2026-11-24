@@ -294,6 +294,19 @@ internal sealed class BackendChain : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(bundledPython))
             names.Add(Path.GetFileNameWithoutExtension(bundledPython));
 
+        // Two guards, both learned the hard way.
+        //
+        // Start time: a process that began after this one is not stale. It is
+        // either the chain this launch is bringing up or a chain a concurrent
+        // launch owns, and killing it would break a working receiver to tidy up
+        // a dead one. This also makes the cleanup safe to run off the UI thread.
+        var startedBefore = Process.GetCurrentProcess().StartTime;
+        // Budget: WaitForExit on a process that ignores the kill costs 3 s each,
+        // and a machine that has accumulated a dozen orphans turns startup into
+        // a multi-minute blank screen. Cleanup is best-effort; the window is not.
+        var budget = System.Diagnostics.Stopwatch.StartNew();
+        var deadline = TimeSpan.FromSeconds(6);
+
         foreach (var name in names.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             Process[] found;
@@ -304,6 +317,12 @@ internal sealed class BackendChain : IAsyncDisposable
                 try
                 {
                     if (!BelongsTo(root, process)) continue;
+                    if (process.StartTime >= startedBefore) continue;
+                    if (budget.Elapsed > deadline)
+                    {
+                        AppLog.Write("stale chain cleanup gave up after 6 s; carrying on");
+                        return killed;
+                    }
                     process.Kill(true);
                     process.WaitForExit(3000);
                     killed++;

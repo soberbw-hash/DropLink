@@ -10,6 +10,9 @@ public partial class App : System.Windows.Application
     // True only for the process that actually owns the receiver chain, so a
     // second launch that immediately shuts down never kills the live backends.
     private bool ownsChain;
+    // Set once a window exists. Read by the startup watchdog and by the
+    // single-instance handshake, so it is volatile rather than merely internal.
+    private volatile bool windowReady;
 
     internal static bool StartMinimized { get; private set; }
 
@@ -80,19 +83,39 @@ public partial class App : System.Windows.Application
             requestOpenSettings: openSettings);
         if (!singleInstance.IsFirst)
         {
+            // The one case that must never be silent: something is holding the
+            // lock and would not show a window. Exiting quietly here is what made
+            // the app look like it refused to open at all.
+            if (singleInstance.UnresponsiveOwnerPid > 0)
+            {
+                MessageBox.Show(
+                    "DropLink 已经在运行，但它没有响应，也没能自动结束。\n\n" +
+                    "请打开「任务管理器」→「详细信息」→ 结束 DropLink.exe（PID " +
+                    singleInstance.UnresponsiveOwnerPid + "），然后重新打开。",
+                    "DropLink", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             Shutdown();
             return;
         }
+        StartStartupWatchdog();
         // We are the only receiver in this session, so any backend still running
         // is a leftover from a run that never cleaned up. It would hold the radio
         // and the stop event and make every start fail.
+        //
+        // Off the UI thread: this walks the process list and waits on kills, and
+        // a machine with several orphans in a bad state can make it take minutes.
+        // The window must not wait for it - a receiver that opens is worth more
+        // than a receiver that tidied up first.
         ownsChain = true;
-        try
+        _ = Task.Run(() =>
         {
-            var killed = BackendChain.KillStaleChain();
-            if (killed > 0) AppLog.Write($"cleaned {killed} stale backend process(es) from a previous run");
-        }
-        catch (Exception error) { AppLog.Write("stale chain cleanup failed: " + error.Message); }
+            try
+            {
+                var killed = BackendChain.KillStaleChain();
+                if (killed > 0) AppLog.Write($"cleaned {killed} stale backend process(es) from a previous run");
+            }
+            catch (Exception error) { AppLog.Write("stale chain cleanup failed: " + error.Message); }
+        });
 
         // Last-resort crash guard: never die silently. async void handlers in
         // WPF can throw outside try/catch; show the reason instead of vanishing.
@@ -115,6 +138,8 @@ public partial class App : System.Windows.Application
 
         var window = new MainWindow();
         MainWindow = window;
+        // The lock is only worth holding while a window exists to go with it.
+        windowReady = true;
         if (StartMinimized)
         {
             // The window is never shown, so Loaded never fires: kick the guide
@@ -126,6 +151,28 @@ public partial class App : System.Windows.Application
             window.Show();
             if (openSettings) window.OpenSettingsWindow();
         }
+        singleInstance?.ConfirmAlive();
+    }
+
+    // A launch that never manages to build a window must not keep the
+    // single-instance lock: it would answer every later double-click with
+    // silence, and only Task Manager could clear it. Releasing the lock by
+    // exiting is the difference between "it did not start" and "it is now
+    // permanently broken".
+    private void StartStartupWatchdog()
+    {
+        var thread = new Thread(() =>
+        {
+            for (var tick = 0; tick < 60 && !windowReady; tick++) Thread.Sleep(500);
+            if (windowReady) return;
+            AppLog.Write("startup watchdog: no window after 30 s, releasing the lock and exiting");
+            Environment.Exit(4);
+        })
+        {
+            IsBackground = true,
+            Name = "DropLink startup watchdog"
+        };
+        thread.Start();
     }
 
     // `DropLink.exe --preview-settings out.png` renders the settings page exactly
@@ -220,6 +267,10 @@ public partial class App : System.Windows.Application
         if (MainWindow is MainWindow ready)
         {
             ready.ShowFromTray();
+            // Tell the launch that woke us that a window really is on screen.
+            // Until this line runs, the other process is entitled to assume we
+            // are wedged and take the lock away.
+            singleInstance?.ConfirmAlive();
             return;
         }
         _ = Task.Run(async () =>
@@ -230,6 +281,7 @@ public partial class App : System.Windows.Application
                 var window = Dispatcher.Invoke(() => MainWindow as MainWindow);
                 if (window is null) continue;
                 _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(window.ShowFromTray));
+                singleInstance?.ConfirmAlive();
                 return;
             }
             AppLog.Write("activate requested but no window exists yet");
