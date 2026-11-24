@@ -21,7 +21,8 @@ internal sealed class BackendChain : IAsyncDisposable
     // The caller must obtain current read-only device data, explicit authorization and recovery evidence.
     // This method must never be wired to an automatic startup or driver installation path.
     internal async Task<string> StartAsync(ChainFiles files, IReadOnlyList<RadioDevice> devices,
-        string selectedInstance, bool authorized, bool recoveryVerified, CancellationToken cancel)
+        string selectedInstance, bool authorized, bool recoveryVerified, CancellationToken cancel,
+        UsbDeviceSnapshot? selectedTarget = null)
     {
         await lifecycle.WaitAsync(cancel).ConfigureAwait(false);
         try
@@ -31,19 +32,21 @@ internal sealed class BackendChain : IAsyncDisposable
             var check = RadioPreflight.Check(devices, selectedInstance, authorized, recoveryVerified,
                 [files.Radio, files.Bridge, files.Netd, files.Awdld]);
             if (!check.Ready) throw new InvalidOperationException(string.Join(" ", check.Problems));
-            // The upstream radio opens by VID/PID, not a verified device instance.
-            // Remain fail-closed until precise selection is implemented and tested on Windows.
-            if (!ValidatedTargetSelection()) throw new NotSupportedException("无线后端尚不能安全地精确选择目标设备；接收已禁用。");
+            // The upstream radio opened by VID/PID (first match); the pinned
+            // patch now accepts AIRBRIDGE_USB_BUS/PORT for strict topology. But
+            // a topology value is only safe if it was resolved from the user's
+            // selected PnP instance and verified on real hardware — neither is
+            // proven here, so the safety lock stays closed. This method NEVER
+            // fabricates a bus/port or substitutes a VID/PID-only open.
+            if (!ValidatedTargetSelection(selectedTarget))
+                throw new NotSupportedException("无线后端尚不能安全地精确选择目标设备；接收已禁用。");
             radioStop = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\DropBridgeRadioStop", out bool created);
             if (!created) throw new InvalidOperationException("另一接收链路正在运行或停止事件已存在。");
             sessionDirectory = Path.Combine(Path.GetTempPath(), "DropLink-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(sessionDirectory);
             string addressFile = Path.Combine(sessionDirectory, "awdl.addr");
-            await StartStage(files.Radio, ["149", "20"], new Dictionary<string, string?> {
-                ["AIRBRIDGE_VID"] = "0x0bda", ["AIRBRIDGE_PID"] = "0xc820",
-                ["AIRBRIDGE_LOG_LEVEL"] = "warn", ["AIRBRIDGE_LINK_STATS"] = "1",
-                ["AIRBRIDGE_FASTRETUNE_FW"] = "2", ["AIRBRIDGE_PARENT_PID"] = Environment.ProcessId.ToString()
-            }, "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(120), cancel).ConfigureAwait(false);
+            await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
+                "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(120), cancel).ConfigureAwait(false);
             await StartStage(files.Bridge, [], [], "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
             await StartStage(files.Netd, [], new Dictionary<string, string?> {
                 ["AWDL_NETD_MDNS_PROXY"] = "1", ["AWDL_NETD_ADDR_FILE"] = addressFile
@@ -77,7 +80,30 @@ internal sealed class BackendChain : IAsyncDisposable
         finally { lifecycle.Release(); }
     }
 
-    private static bool ValidatedTargetSelection() => false;
+    // Fail-closed. Supplies strict topology to the radio ONLY when a resolved
+    // target is passed in; default behavior remains the legacy VID/PID open.
+    // Kept internal+static so this mapping is unit-testable without starting
+    // any process or touching hardware.
+    internal static Dictionary<string, string?> BuildRadioEnvironment(UsbDeviceSnapshot? target)
+    {
+        var env = new Dictionary<string, string?> {
+            ["AIRBRIDGE_VID"] = "0x0bda", ["AIRBRIDGE_PID"] = "0xc820",
+            ["AIRBRIDGE_LOG_LEVEL"] = "warn", ["AIRBRIDGE_LINK_STATS"] = "1",
+            ["AIRBRIDGE_FASTRETUNE_FW"] = "2", ["AIRBRIDGE_PARENT_PID"] = Environment.ProcessId.ToString()
+        };
+        if (target is not null)
+        {
+            env["AIRBRIDGE_VID"] = $"0x{target.Vid:x4}";
+            env["AIRBRIDGE_PID"] = $"0x{target.Pid:x4}";
+            env["AIRBRIDGE_USB_BUS"] = target.Bus.ToString();
+            if (!string.IsNullOrWhiteSpace(target.PortPath)) env["AIRBRIDGE_USB_PORT"] = target.PortPath;
+        }
+        return env;
+    }
+
+    // Safety lock. Stays false until precise PnP<->libusb binding and recovery
+    // are proven on real hardware; passing a target does not open it.
+    private static bool ValidatedTargetSelection(UsbDeviceSnapshot? target) => false;
 
     private async Task StartStage(string path, string[] args, Dictionary<string, string?> environment,
         string ready, TimeSpan timeout, CancellationToken cancel)

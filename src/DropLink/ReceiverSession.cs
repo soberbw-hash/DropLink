@@ -22,7 +22,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
         ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
         bool authorized, bool recoveryVerified,
         string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName,
-        CancellationToken cancel = default)
+        UsbDeviceSnapshot? selectedTarget = null, CancellationToken cancel = default)
     {
         await lifecycle.WaitAsync(cancel).ConfigureAwait(false);
         try
@@ -32,7 +32,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
             // Safety lock lives in BackendChain.StartAsync. With it closed this
             // throws before any engine process is created.
             var addressFile = await chain.StartAsync(
-                files, devices, selectedInstance, authorized, recoveryVerified, cancel).ConfigureAwait(false);
+                files, devices, selectedInstance, authorized, recoveryVerified, cancel, selectedTarget).ConfigureAwait(false);
             try
             {
                 engine = EngineClient.Start(python, engineScript, addressFile, outputDirectory,

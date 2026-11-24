@@ -50,6 +50,7 @@ def main():
     for repo, patch in ((win, bridge / 'patches/awdl-ipc-host.patch'),
                         (owl, bridge / 'patches/owl-airbridge.patch'),
                         (dev, bridge / 'patches/devourer-airbridge.patch'),
+                        (bridge, ROOT / 'patches/radio-topology-select.patch'),
                         (win, ROOT / 'patches/engine-default-directory.patch'),
                         (win, ROOT / 'patches/atomic-file-publish.patch'),
                         (win, ROOT / 'patches/engine-proxy-mode.patch'),

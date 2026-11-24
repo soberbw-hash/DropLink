@@ -1,0 +1,113 @@
+diff --git a/src/radio_usb/main.cpp b/src/radio_usb/main.cpp
+index db7bf7d..d84c4ac 100644
+--- a/src/radio_usb/main.cpp
++++ b/src/radio_usb/main.cpp
+@@ -287,7 +287,63 @@ int run(uint8_t channel, int width_mhz, uint16_t port, bool skip_reset) {
+ 
+     const uint16_t vid = env_hex16("AIRBRIDGE_VID", 0x0bda);
+     const uint16_t pid = env_hex16("AIRBRIDGE_PID", 0xc820);
+-    libusb_device_handle *handle = libusb_open_device_with_vid_pid(ctx, vid, pid);
++    libusb_device_handle *handle = nullptr;
++    const char *bus_env = std::getenv("AIRBRIDGE_USB_BUS");
++    const char *port_env = std::getenv("AIRBRIDGE_USB_PORT");
++    if (bus_env && *bus_env) {
++        /* Strict topology selection for host-controlled device identity.
++         * Matching is bus + (optional) dotted port path + VID/PID. There is
++         * deliberately NO fallback to libusb_open_device_with_vid_pid here:
++         * when a specific socket was requested, opening the first card with
++         * the same VID:PID would silently pick a DIFFERENT adapter — exactly
++         * the ambiguity this mode exists to remove. Bounded polling tolerates
++         * the brief re-enumeration after a prior session's reset/firmware load.
++         * This project never sets these variables automatically; a validated
++         * coordinator supplies them after the user's explicit authorization. */
++        const uint8_t want_bus =
++            static_cast<uint8_t>(std::strtoul(bus_env, nullptr, 0));
++        const std::string want_port = port_env ? port_env : "";
++        const auto deadline = std::chrono::steady_clock::now() +
++                              std::chrono::seconds(20);
++        while (!handle && std::chrono::steady_clock::now() < deadline) {
++            libusb_device **list = nullptr;
++            const ssize_t n = libusb_get_device_list(ctx, &list);
++            for (ssize_t i = 0; i < n && !handle; ++i) {
++                libusb_device_descriptor dd{};
++                if (libusb_get_device_descriptor(list[i], &dd) != 0) continue;
++                if (dd.idVendor != vid || dd.idProduct != pid) continue;
++                if (libusb_get_bus_number(list[i]) != want_bus) continue;
++                if (!want_port.empty()) {
++                    uint8_t ports[8] = {};
++                    const int pc = libusb_get_port_numbers(list[i], ports,
++                                                           sizeof(ports));
++                    std::string path;
++                    for (int p = 0; p < pc; ++p) {
++                        if (!path.empty()) path += '.';
++                        path += std::to_string(ports[p]);
++                    }
++                    if (path != want_port) continue;
++                }
++                if (libusb_open(list[i], &handle) != 0) handle = nullptr;
++            }
++            if (list != nullptr) libusb_free_device_list(list, 1);
++            if (!handle)
++                std::this_thread::sleep_for(std::chrono::milliseconds(250));
++        }
++        if (!handle) {
++            logger->error("radio: no device {:04x}:{:04x} on bus {} port '{}' "
++                          "(strict topology; no VID/PID fallback)",
++                          vid, pid, want_bus,
++                          want_port.empty() ? "(any)" : want_port.c_str());
++            libusb_exit(ctx);
++            WSACleanup();
++            return 2;
++        }
++        logger->info("radio: opened {:04x}:{:04x} on bus {} port {}", vid, pid,
++                     want_bus, want_port.empty() ? "(any)" : want_port.c_str());
++    } else {
++        handle = libusb_open_device_with_vid_pid(ctx, vid, pid);
++    }
+     if (!handle) {
+         logger->error("radio: no device {:04x}:{:04x} (is MI_02 on WinUSB?)",
+                       vid, pid);
+@@ -809,7 +865,43 @@ int run(uint8_t channel, int width_mhz, uint16_t port, bool skip_reset) {
+ 
+ }  // namespace
+ 
++/* Read-only device inventory. Prints one JSON object to stdout and exits
++ * WITHOUT opening, resetting or claiming any device — no driver, firmware or
++ * radio operation. Lets a host map PnP interfaces to libusb bus/port paths;
++ * empty when libusb enumerates no matching adapter. Never starts the radio. */
++int list_devices() {
++    libusb_context *ctx = nullptr;
++    if (libusb_init(&ctx) != 0) {
++        std::fprintf(stderr, "{\"error\":\"libusb_init failed\"}\n");
++        return 1;
++    }
++    libusb_device **list = nullptr;
++    const ssize_t n = libusb_get_device_list(ctx, &list);
++    std::printf("[");
++    int printed = 0;
++    for (ssize_t i = 0; i < n; ++i) {
++        libusb_device_descriptor dd{};
++        if (libusb_get_device_descriptor(list[i], &dd) != 0) continue;
++        uint8_t ports[8] = {};
++        const int pc = libusb_get_port_numbers(list[i], ports, sizeof(ports));
++        std::string path;
++        for (int p = 0; p < pc; ++p) {
++            if (!path.empty()) path += '.';
++            path += std::to_string(ports[p]);
++        }
++        std::printf("%s{\"bus\":%u,\"port\":\"%s\",\"vid\":%u,\"pid\":%u}",
++                    printed++ ? "," : "", libusb_get_bus_number(list[i]),
++                    path.c_str(), dd.idVendor, dd.idProduct);
++    }
++    if (list != nullptr) libusb_free_device_list(list, 1);
++    libusb_exit(ctx);
++    std::printf("]\n");
++    return 0;
++}
++
+ int main(int argc, char **argv) {
++    if (argc > 1 && std::strcmp(argv[1], "--list-devices") == 0)
++        return list_devices();
+     const int channel_arg =
+         argc > 1 ? std::atoi(argv[1]) : env_int("AIRBRIDGE_CHANNEL", 6);
+     const int width_arg =

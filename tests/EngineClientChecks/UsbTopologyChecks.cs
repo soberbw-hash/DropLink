@@ -65,6 +65,42 @@ internal static class UsbTopologyChecks
         Require(!UsbTopology.Resolve(Target(hardware: "USB\\VID_0BDA&PID_C820&MI_00"), [right]).Selected,
             "hardware ID MI mismatch");
 
-        Console.WriteLine("PASS: PnP->libusb topology mapping, multi-card, re-enumeration and fail-closed checks");
+        // BackendChain maps a resolved target to the radio's strict-topology
+        // environment variables. Without a target, legacy VID/PID behavior is
+        // preserved (no AIRBRIDGE_USB_BUS/PORT keys).
+        var legacyEnv = BackendChain.BuildRadioEnvironment(null);
+        Require(!legacyEnv.ContainsKey("AIRBRIDGE_USB_BUS") && !legacyEnv.ContainsKey("AIRBRIDGE_USB_PORT"),
+            "no topology env without a resolved target");
+        Require(legacyEnv["AIRBRIDGE_VID"] == "0x0bda" && legacyEnv["AIRBRIDGE_PID"] == "0xc820",
+            "legacy VID/PID defaults");
+        var strictEnv = BackendChain.BuildRadioEnvironment(new UsbDeviceSnapshot(3, "1.4.2", 0x0bda, 0xc820));
+        Require(strictEnv["AIRBRIDGE_USB_BUS"] == "3" && strictEnv["AIRBRIDGE_USB_PORT"] == "1.4.2",
+            "strict topology env from resolved target");
+        Require(strictEnv["AIRBRIDGE_VID"] == "0x0bda" && strictEnv["AIRBRIDGE_PID"] == "0xc820",
+            "VID/PID formatted from target");
+        var busOnly = BackendChain.BuildRadioEnvironment(new UsbDeviceSnapshot(2, "", 0x0bda, 0xc820));
+        Require(busOnly.ContainsKey("AIRBRIDGE_USB_BUS") && !busOnly.ContainsKey("AIRBRIDGE_USB_PORT"),
+            "bus-only selection omits empty port");
+
+        // Read-only inventory parsing (sample from the real --list-devices output:
+        // two 0BDA:C811 cards on ports 8 and 5, plus non-radio devices).
+        var inventoryJson = "[{\"bus\":1,\"port\":\"\",\"vid\":32902,\"pid\":31456}," +
+            "{\"bus\":1,\"port\":\"8\",\"vid\":3034,\"pid\":51217}," +
+            "{\"bus\":1,\"port\":\"4\",\"vid\":11145,\"pid\":2322}," +
+            "{\"bus\":1,\"port\":\"5\",\"vid\":3034,\"pid\":51217}]";
+        var inventory = DeviceInventory.Parse(inventoryJson);
+        Require(inventory.Error is null && inventory.Devices.Count == 4, "parse inventory JSON");
+        var cards = inventory.Devices.Where(d => d.Vid == 0x0bda && d.Pid == 0xc811).ToArray();
+        Require(cards.Length == 2, "two identical-VID/PID cards enumerated");
+        // A PnP target on port 5 resolves to exactly the second card.
+        var cardTarget = new PnpRadioTarget(
+            "USB\\VID_0BDA&PID_C811&MI_02\\inst", "USB\\VID_0BDA&PID_C811&MI_02",
+            "Port_#0005.Hub_#0001", "WinUSB", "OK");
+        var picked = UsbTopology.Resolve(cardTarget, inventory.Devices);
+        Require(picked.Selected && picked.Device == cards[1], "inventory feeds topology to pick correct card");
+        Require(DeviceInventory.Parse("{}").Error is not null, "reject non-array inventory");
+        Require(DeviceInventory.Parse("not json").Error is not null, "reject malformed inventory");
+
+        Console.WriteLine("PASS: PnP->libusb topology mapping, multi-card, re-enumeration, fail-closed, radio env mapping and read-only inventory checks");
     }
 }

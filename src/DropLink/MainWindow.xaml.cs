@@ -13,7 +13,8 @@ public partial class MainWindow : Window
     private async Task StartSessionAsync(
         ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
         bool authorized, bool recoveryVerified,
-        string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName)
+        string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName,
+        UsbDeviceSnapshot? selectedTarget = null)
     {
         if (session is not null) throw new InvalidOperationException("接收会话已经启动。");
         var created = new ReceiverSession();
@@ -23,7 +24,7 @@ public partial class MainWindow : Window
         try
         {
             await created.StartAsync(files, devices, selectedInstance, authorized, recoveryVerified,
-                python, engineScript, outputDirectory, keysDirectory, deviceName);
+                python, engineScript, outputDirectory, keysDirectory, deviceName, selectedTarget);
         }
         catch
         {
@@ -85,6 +86,25 @@ public partial class MainWindow : Window
                 var name = item.GetProperty("Name").GetString();
                 var hint = hardware.StartsWith("VID_0BDA&PID_C820", StringComparison.OrdinalIgnoreCase) ? "上游有同 USB ID 的历史验证；本设备未验证" : "未确认兼容性";
                 lines.Add($"{name ?? "未命名设备"}  ·  {hardware}\n{hint}");
+            }
+            // Optional read-only libusb view. Enabled only when a radio path is
+            // configured via DROPLINK_RADIO_EXE; --list-devices never opens or
+            // resets a device. This supplies bus/port data for topology mapping
+            // but does NOT select a device, start the radio or enable receiving.
+            var radioExe = Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE");
+            if (!string.IsNullOrWhiteSpace(radioExe))
+            {
+                var inventory = await Task.Run(() => DeviceInventory.Read(radioExe));
+                if (inventory.Error is null && inventory.Devices.Count > 0)
+                {
+                    lines.Add("— libusb 视角（只读枚举，未选中任何设备）—");
+                    foreach (var d in inventory.Devices)
+                        lines.Add($"bus {d.Bus} · port {(string.IsNullOrEmpty(d.PortPath) ? "(根端口)" : d.PortPath)} · {d.Vid:x4}:{d.Pid:x4}");
+                }
+                else if (inventory.Error is not null)
+                {
+                    lines.Add("libusb 枚举不可用：" + inventory.Error);
+                }
             }
             Devices.Text = lines.Count == 0 ? "未发现可识别的 USB 硬件 ID。" : string.Join("\n\n", lines);
         }
