@@ -48,7 +48,10 @@ internal static class AppPaths
             Fill("DROPLINK_NETD_EXE", Path.Combine(flat, "awdl_netd.exe"));
             Fill("DROPLINK_AWDLD_EXE", Path.Combine(flat, "awdld.exe"));
             Fill("DROPLINK_PYTHON", Path.Combine(flat, "python", "python.exe"));
-            Fill("DROPLINK_ENGINE_SCRIPT", Path.Combine(flat, "engine", "engine.py"));
+            // The bundled embedded Python ships python312._pth containing
+            // "..\airdrop", so the engine MUST live in backend\airdrop or its
+            // own modules cannot be imported (sys.path is frozen by the _pth).
+            Fill("DROPLINK_ENGINE_SCRIPT", Path.Combine(flat, "airdrop", "engine.py"));
             FillDirectory("DROPLINK_OUTPUT_DIR", Path.Combine(work.FullName, "data", "received"));
             FillDirectory("DROPLINK_KEYS_DIR", Path.Combine(work.FullName, "data", "keys"));
             FillValue("DROPLINK_DEVICE_NAME", "DropLink");

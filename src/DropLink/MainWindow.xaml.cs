@@ -10,6 +10,9 @@ public partial class MainWindow : Window
     private ReceiverSession? session;
     private GuideStep currentStep = GuideStep.EnvironmentBlocked;
     private bool detailsVisible;
+    // Transient status ("正在初始化网卡…") lives on the progress line, not in the
+    // details box, so the details box can stay collapsed until the user asks.
+    private bool transientProgress;
     public MainWindow()
     {
         InitializeComponent();
@@ -51,8 +54,15 @@ public partial class MainWindow : Window
         if (current is not null) await current.DisposeAsync();
     }
 
+    // A dead chain must release the session, otherwise the guide keeps showing
+    // "正在接收" with nothing running and the button refuses to restart.
     private void OnSessionFailed(string message) =>
-        _ = Dispatcher.BeginInvoke(() => MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning));
+        _ = Dispatcher.BeginInvoke(async () =>
+        {
+            MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning);
+            try { await CloseSessionAsync(); await CheckReadinessAsync(); }
+            catch (Exception) { /* refresh is best-effort */ }
+        });
 
     // Engine facts are applied on the UI thread; an 'asked' event triggers an
     // explicit confirmation whose answer is sent back through the session.
@@ -76,6 +86,7 @@ public partial class MainWindow : Window
     {
         var row = transferState.Items.FirstOrDefault();
         if (row is null) return;
+        transientProgress = false; // a real transfer owns this line now
         ProgressPanel.Visibility = Visibility.Visible;
         ProgressText.Text = string.IsNullOrEmpty(row.Progress)
             ? $"{row.Status} · {row.Files}"
@@ -127,6 +138,14 @@ public partial class MainWindow : Window
     // Render the guide result into the big card and highlight the current step.
     private void ApplyGuide(SetupGuideResult guide)
     {
+        // A transient status has served its purpose once the guide moved on;
+        // leaving it behind would look like the app is still busy.
+        if (transientProgress)
+        {
+            transientProgress = false;
+            ProgressPanel.Visibility = Visibility.Collapsed;
+            ProgressText.Text = "";
+        }
         GuideStepLabel.Text = guide.StepLabel;
         GuideTitle.Text = guide.Title;
         GuideDetail.Text = guide.Detail;
@@ -186,22 +205,35 @@ public partial class MainWindow : Window
     {
         detailsVisible = !detailsVisible;
         ReceiveStatus.Visibility = detailsVisible ? Visibility.Visible : Visibility.Collapsed;
+        DetailsToggle.Content = detailsVisible ? "收起" : "详细信息";
     }
 
-    // Show an operation result where the user can actually see it. The details
-    // box is hidden by default, so writing to Text alone looks like "nothing happened".
-    private void ShowDetails(string message)
+    // A status line above the links: visible while something is happening,
+    // gone once it is done. It never opens the details box.
+    private void ShowProgress(string message)
+    {
+        transientProgress = true;
+        ProgressText.Text = message;
+        ProgressPanel.Visibility = Visibility.Visible;
+    }
+
+    // Details stay collapsed unless the caller has to explain a failure.
+    private void ShowDetails(string message, bool expand = false)
     {
         ReceiveStatus.Text = message;
+        if (!expand) return;
         detailsVisible = true;
         ReceiveStatus.Visibility = Visibility.Visible;
+        DetailsToggle.Content = "收起";
     }
 
     // Even when enabled, starting still goes through ReceiverSession ->
     // BackendChain, whose ValidatedTargetSelection() safety lock stays closed.
     private async void StartReceive_Click(object sender, RoutedEventArgs e)
     {
-        ShowDetails("正在启动…");
+        // The radio needs ~45 s of firmware + RF init before the chain is up,
+        // so say so instead of appearing frozen.
+        ShowProgress("正在初始化网卡（约 40~60 秒），请不要关闭窗口…");
         try
         {
             var devices = await QueryRadioDevicesAsync();
@@ -224,7 +256,16 @@ public partial class MainWindow : Window
                 selectedTarget, legacy);
             await CheckReadinessAsync(); // advance the guide to "receiving" (step 3)
         }
-        catch (Exception ex) { ShowDetails("启动失败：" + ex.Message); }
+        catch (Exception ex)
+        {
+            // A failed start must not leave a half-built session behind: that is
+            // what made the next click report "接收会话已经启动" while no backend
+            // process was actually running.
+            await CloseSessionAsync();
+            var reason = "启动失败：" + ex.Message;
+            await CheckReadinessAsync(); // back to step 2 so the button works again
+            ShowDetails(reason, expand: true); // keep the reason visible after the refresh
+        }
     }
 
     // Driver rollback goes through the same confirmed, elevated, self-refreshing
@@ -275,7 +316,7 @@ public partial class MainWindow : Window
                      })
                 psi.ArgumentList.Add(arg);
 
-            ShowDetails(switchToWinUsb
+            ShowProgress(switchToWinUsb
                 ? "正在切换驱动，请稍等（最多 1 分钟，完成后会自动刷新）…"
                 : "正在恢复驱动，请稍等（完成后会自动刷新）…");
             GuideAction.IsEnabled = false;
@@ -294,7 +335,7 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrWhiteSpace(stdout)) detail.AppendLine().AppendLine(stdout.Trim());
                 if (!string.IsNullOrWhiteSpace(stderr)) detail.AppendLine().AppendLine(stderr.Trim());
                 detail.AppendLine().AppendLine(ReadLogTail(Path.Combine(Path.GetDirectoryName(script) ?? "", "setup.log")));
-                ShowDetails(detail.ToString().Trim());
+                ShowDetails(detail.ToString().Trim(), expand: true);
             }
         }
         catch (Exception ex)
