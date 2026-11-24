@@ -11,7 +11,26 @@ var temp = Path.Combine(Path.GetTempPath(), "droplink-test-" + Guid.NewGuid().To
 Directory.CreateDirectory(temp);
 try
 {
-    var realExeDir = Path.Combine(root, "src/DropLink/bin/Release/net10.0-windows");
+    // Build an isolated self-contained layout so path bootstrap checks do not
+    // depend on a prepared-next tree being present in the source checkout.
+    var work = Path.Combine(temp, "work");
+    var realExeDir = Path.Combine(work, "DropLink", "src", "DropLink", "bin", "Release", "net10.0-windows");
+    var prepared = Path.Combine(work, "prepared-next");
+    var radioDir = Path.Combine(prepared, "dropbridge", "build", "radio-local2", "Release");
+    var netdDir = Path.Combine(prepared, "dropbridge", "build", "netd-local", "Release");
+    var awdlDir = Path.Combine(prepared, "winawdl", "build", "awdl-portable");
+    var backupDir = Path.Combine(work, "_backup", "droplink-driver-20261124");
+    foreach (var dir in new[] { radioDir, netdDir, awdlDir, backupDir, realExeDir })
+        Directory.CreateDirectory(dir);
+    foreach (var file in new[]
+    {
+        Path.Combine(radioDir, "airbridge_radio.exe"),
+        Path.Combine(radioDir, "radio_pipe_bridge.exe"),
+        Path.Combine(netdDir, "awdl_netd.exe"),
+        Path.Combine(awdlDir, "awdld.exe"),
+        Path.Combine(backupDir, "一键换WinUSB.cmd"),
+        Path.Combine(backupDir, "回退驱动.cmd")
+    }) File.WriteAllText(file, "placeholder");
     AppPathsChecks.Run(realExeDir);
     RadioPreflightChecks.Run(temp);
     ReadinessReportChecks.Run(temp);

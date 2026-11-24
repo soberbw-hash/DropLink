@@ -59,7 +59,7 @@ internal static class SetupGuide
             return new SetupGuideResult(
                 GuideStep.Receiving, "第 3 步 / 共 3 步",
                 "正在接收",
-                "在 iPhone 上分享文件，选这台电脑。",
+                "在 iPhone 上用隔空投送分享文件，选这台电脑。",
                 "", false);
 
         if (input.ReadyWinUsbCards == 0)

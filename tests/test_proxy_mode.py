@@ -11,7 +11,10 @@ from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 AIR = pathlib.Path(os.environ.get('DROPLINK_AIRDROP_DIR', ROOT / '.prepared/winawdl/airdrop'))
-sys.path[:0] = [str(AIR), str(AIR / 'tests')]
+# Vendored at WinAWDL 2196fb48b97cef1ee17ee1350c442972c4efeaf0 so Heard is
+# available without requiring a full prepared source tree for offline checks.
+VENDOR = pathlib.Path(__file__).resolve().parent / 'support' / 'winawdl'
+sys.path[:0] = [str(AIR), str(VENDOR), str(AIR / 'tests')]
 import engine
 import receiver
 import sender

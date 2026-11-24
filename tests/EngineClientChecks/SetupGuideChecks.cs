@@ -28,9 +28,8 @@ internal static class SetupGuideChecks
         var env = SetupGuide.Evaluate(new SetupGuide.Input([], 0, false, true, true, false));
         Require(env.Step == GuideStep.EnvironmentBlocked, "missing backend blocks environment");
         Require(env.Title.Contains("后端组件"), "environment step names backend components");
-        Require(env.Detail.Contains("prepared-next"), "environment step points to prepared-next folder");
-        Require(env.Detail.Contains("_backup"), "environment step points to _backup folder");
-        Require(env.Detail.Contains("拷"), "environment step tells user to copy folders");
+        Require(env.Detail.Contains("backend"), "environment step points to backend folder");
+        Require(env.Detail.Contains("软件目录"), "environment step points to the portable root");
 
         // Recovery / authorization flags absent -> need to relaunch via script.
         var restart = SetupGuide.Evaluate(new SetupGuide.Input(files, 1, true, false, false, false));

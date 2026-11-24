@@ -19,11 +19,21 @@ internal static class RadioPreflight
     ];
     internal const string KnownHardwareId = "USB\\VID_0BDA&PID_C820&MI_02"; // legacy alias
 
-    internal static bool IsSupportedHardwareId(string id) =>
-        KnownHardwareIds.Any(k => string.Equals(k, id, StringComparison.OrdinalIgnoreCase));
+    internal static bool IsSupportedHardwareId(string id)
+    {
+        var policy = HardwarePolicy.Current;
+        if (!string.Equals(policy.Source, "builtin", StringComparison.OrdinalIgnoreCase))
+            return policy.AllowsHardwareId(id);
+        return KnownHardwareIds.Any(k => string.Equals(k, id, StringComparison.OrdinalIgnoreCase));
+    }
 
-    internal static bool IsSupportedUsbId(ushort vid, ushort pid) =>
-        vid == 0x0bda && (pid == 0xc811 || pid == 0xc820);
+    internal static bool IsSupportedUsbId(ushort vid, ushort pid)
+    {
+        var policy = HardwarePolicy.Current;
+        if (!string.Equals(policy.Source, "builtin", StringComparison.OrdinalIgnoreCase))
+            return policy.AllowsUsbId(vid, pid);
+        return vid == 0x0bda && (pid == 0xc811 || pid == 0xc820);
+    }
 
     internal static RadioPreflightResult Check(
         IReadOnlyList<RadioDevice> devices, string selectedInstanceId,

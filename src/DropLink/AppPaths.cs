@@ -54,6 +54,7 @@ internal static class AppPaths
             Fill("DROPLINK_ENGINE_SCRIPT", Path.Combine(flat, "airdrop", "engine.py"));
             FillDirectory("DROPLINK_OUTPUT_DIR", Path.Combine(work.FullName, "data", "received"));
             FillDirectory("DROPLINK_KEYS_DIR", Path.Combine(work.FullName, "data", "keys"));
+            Fill("DROPLINK_HARDWARE_FILE", Path.Combine(work.FullName, "data", "hardware.json"));
             FillValue("DROPLINK_DEVICE_NAME", "DropLink");
 
             // Portable driver kit: point at the .ps1 directly. The app runs it
