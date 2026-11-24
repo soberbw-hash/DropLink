@@ -236,6 +236,34 @@ switch ($Action) {
     }
     'doctor' { Run-Doctor }
     'doctor-json' { Get-DoctorData | ConvertTo-Json -Depth 6 }
+    'export-diagnostics' {
+        # One zip a user can send for support: logs, doctor snapshot, settings.
+        # Never includes data\keys (TLS material) or received files.
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $logDir = Join-Path $root 'data\logs'
+        $items = @()
+        foreach ($name in @('app.log', 'app.log.1', 'engine.log', 'engine-stderr.log', 'engine-stderr.log.1')) {
+            $p = Join-Path $logDir $name
+            if (Test-Path -LiteralPath $p) { $items += $p }
+        }
+        foreach ($name in @('settings.json', 'hardware.json')) {
+            $p = Join-Path $root ('data\' + $name)
+            if (Test-Path -LiteralPath $p) { $items += $p }
+        }
+        if (Test-Path -LiteralPath $logDir) {
+            $doctorPath = Join-Path $logDir ('doctor-' + $stamp + '.json')
+            try {
+                (Get-DoctorData | ConvertTo-Json -Depth 6) |
+                    Set-Content -LiteralPath $doctorPath -Encoding utf8
+                $items += $doctorPath
+            } catch { }
+        }
+        if ($items.Count -eq 0) { throw 'nothing to export' }
+        $out = Join-Path $root ('data\diagnostics-' + $stamp + '.zip')
+        if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force }
+        Compress-Archive -LiteralPath $items -DestinationPath $out -Force
+        Write-Output ('OK ' + $out)
+    }
     'testcard' {
         $card = Join-Path $PSScriptRoot 'test-card.ps1'
         if (-not (Test-Path -LiteralPath $card)) { throw 'test-card.ps1 is missing' }

@@ -3,7 +3,26 @@ using DropLink;
 
 var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
 var mock = Path.Combine(root, "tests/EngineClientChecks/mock_engine.py");
-var python = Environment.GetEnvironmentVariable("DROPLINK_TEST_PYTHON") ?? "/usr/bin/python3";
+// Resolve an interpreter that actually exists on this host. The previous
+// hardcoded /usr/bin/python3 made the whole suite fail on Windows with a
+// FileNotFoundException that looked like a product bug. Order: explicit
+// override, then the bundled portable runtime, then whatever is on PATH.
+var python = ResolvePython();
+static string ResolvePython()
+{
+    var overridden = Environment.GetEnvironmentVariable("DROPLINK_TEST_PYTHON");
+    if (!string.IsNullOrWhiteSpace(overridden)) return overridden;
+
+    if (OperatingSystem.IsWindows())
+    {
+        var bundled = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            "DropLink-可运行", "backend", "python", "python.exe");
+        if (File.Exists(bundled)) return bundled;
+        return "python.exe";
+    }
+    return File.Exists("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
+}
 var asked = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 var answered = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 var unexpectedExit = false;
@@ -41,6 +60,7 @@ try
     else Console.WriteLine("SKIP: single instance is Windows-only");
     await ReceiverSessionChecks.Run(temp);
     TransferStateChecks.Run();
+CrashBudgetChecks.Run();
     if (!OperatingSystem.IsWindows())
     {
         await using var chain = new BackendChain();

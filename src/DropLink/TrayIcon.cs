@@ -27,11 +27,14 @@ internal sealed class TrayIcon : IDisposable
         settings.Click += (_, _) => OpenSettings();
         var folder = new Forms.ToolStripMenuItem("打开接收文件夹");
         folder.Click += (_, _) => OpenReceiveFolder();
+        var diagnostics = new Forms.ToolStripMenuItem("导出诊断包");
+        diagnostics.Click += (_, _) => ExportDiagnostics();
         var quit = new Forms.ToolStripMenuItem("退出 DropLink");
         quit.Click += (_, _) => exit();
         menu.Items.Add(open);
         menu.Items.Add(settings);
         menu.Items.Add(folder);
+        menu.Items.Add(diagnostics);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(quit);
 
@@ -129,6 +132,69 @@ internal sealed class TrayIcon : IDisposable
         {
             UseShellExecute = true
         });
+    }
+
+    // Runs the settings tool off the UI thread: it zips logs plus a doctor
+    // snapshot, then tells the user where it landed and opens the folder.
+    private void ExportDiagnostics()
+    {
+        var script = Path.Combine(PortableRoot(), "backend", "airdrop", "settings-tool.ps1");
+        _ = Task.Run(() =>
+        {
+            string message;
+            var ok = false;
+            try
+            {
+                if (!File.Exists(script))
+                {
+                    message = "找不到诊断脚本：" + script;
+                }
+                else
+                {
+                    var info = new ProcessStartInfo("powershell.exe")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        WorkingDirectory = Path.GetDirectoryName(script) ?? PortableRoot(),
+                        Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Action export-diagnostics"
+                    };
+                    using var process = Process.Start(info);
+                    if (process is null)
+                    {
+                        message = "无法启动诊断脚本。";
+                    }
+                    else
+                    {
+                        var output = process.StandardOutput.ReadToEnd();
+                        _ = process.StandardError.ReadToEnd();
+                        process.WaitForExit(60000);
+                        var line = output.Split('\n')
+                            .FirstOrDefault(l => l.TrimStart().StartsWith("OK ", StringComparison.Ordinal));
+                        if (line is null) message = "导出失败，详见 data\\logs\\app.log。";
+                        else { message = "已导出：" + line.Trim()[3..]; ok = true; }
+                    }
+                }
+            }
+            catch (Exception error) { message = "导出失败：" + error.Message; }
+
+            window.Dispatcher.BeginInvoke(() =>
+            {
+                Notify("DropLink 诊断包", message);
+                if (ok) OpenReceiveFolderFor(Path.Combine(PortableRoot(), "data"));
+            });
+        });
+    }
+
+    private static void OpenReceiveFolderFor(string folder)
+    {
+        try
+        {
+            if (!Directory.Exists(folder)) return;
+            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true });
+        }
+        catch (Exception) { /* opening a folder is best-effort */ }
     }
 
     private static string PortableRoot()

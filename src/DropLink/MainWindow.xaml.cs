@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     // restarts itself when the chain dies, so the user never has to click.
     private int restartAttempts;
     private bool restartScheduled;
+    private string lastStage = "";
     public MainWindow()
     {
         InitializeComponent();
@@ -119,6 +120,7 @@ public partial class MainWindow : Window
         created.EngineEvent += OnEngineEvent;
         created.Failed += OnSessionFailed;
         created.Stage += OnSessionStage;
+        created.Notice += OnSessionNotice;
         session = created;
         try
         {
@@ -179,22 +181,66 @@ public partial class MainWindow : Window
         try
         {
             await Task.Delay(delay);
+            // Release the slot before any long wait so a failure inside the
+            // start below can still schedule the next attempt.
+            restartScheduled = false;
             if (exitRequested || session is not null) return;
             await CheckReadinessAsync();
-            if (currentStep != GuideStep.StartReceiving) return;
+            if (exitRequested || session is not null) return;
+            if (currentStep != GuideStep.StartReceiving)
+            {
+                // The adapter is unplugged or not mapped yet. That is a normal
+                // state, not a failure: wait for it without spending attempts.
+                await WaitForDeviceThenStartAsync();
+                return;
+            }
             await StartReceiveAsync(silent: true);
         }
-        catch (Exception error) { AppLog.Write("auto restart failed: " + error.Message); }
-        finally { restartScheduled = false; }
+        catch (Exception error)
+        {
+            AppLog.Write("auto restart failed: " + error.Message);
+            restartScheduled = false;
+        }
+    }
+
+    // Polls slowly until a usable card is back, then resumes receiving. This is
+    // what makes "拔掉网卡再插回来" recover without the user touching anything.
+    private async Task WaitForDeviceThenStartAsync()
+    {
+        AppLog.Write("waiting for a usable radio; recovery is paused, not failing");
+        while (!exitRequested && session is null)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(60));
+            if (exitRequested || session is not null) return;
+            await CheckReadinessAsync();
+            if (currentStep != GuideStep.StartReceiving) continue;
+            restartAttempts = 0;
+            await StartReceiveAsync(silent: true);
+            return;
+        }
     }
 
     // Chain stages arrive off the UI thread; a running transfer keeps the line.
     private void OnSessionStage(string message) =>
         _ = Dispatcher.BeginInvoke(() =>
         {
+            lastStage = message;
             if (!transientProgress) return;
             ProgressText.Text = message;
             ProgressPanel.Visibility = Visibility.Visible;
+        });
+
+    // Recoverable events: the session healed itself, so nothing is torn down.
+    private void OnSessionNotice(string message) =>
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            AppLog.Write("notice: " + message);
+            if (IsVisible)
+            {
+                if (transientProgress) ProgressText.Text = message;
+                return;
+            }
+            tray?.Notify("DropLink 自动恢复", message);
         });
 
     // Engine facts are applied on the UI thread; an 'asked' event triggers an
@@ -411,15 +457,20 @@ public partial class MainWindow : Window
             // what made the next click report "接收会话已经启动" while no backend
             // process was actually running.
             await CloseSessionAsync();
-            var reason = "启动失败：" + ex.Message;
-            AppLog.Write("start failed: " + ex.Message);
+            // Layered error: which stage, what happened, where to look. One
+            // opaque sentence is what made every past failure a guessing game.
+            var stage = string.IsNullOrWhiteSpace(lastStage)
+                ? "启动准备"
+                : lastStage.TrimEnd('…', '.', ' ');
+            var reason = $"启动失败（阶段：{stage}）\n原因：{ex.Message}\n日志：data\\logs\\app.log";
+            AppLog.Write($"start failed at [{stage}]: {ex.Message}");
             await CheckReadinessAsync(); // back to step 2 so the button works again
             // Leaving "正在初始化网卡…" on screen after a failure is what makes a
             // failed start look like a hang. Replace it with the real reason.
             ClearProgress();
             GuideStepLabel.Text = "启动失败";
-            GuideTitle.Text = "接收没有启动起来";
-            GuideDetail.Text = ex.Message;
+            GuideTitle.Text = $"接收没有启动起来（{stage}）";
+            GuideDetail.Text = ex.Message + "\n详细日志：data\\logs\\app.log";
             ShowDetails(reason, expand: true); // keep the reason visible after the refresh
             // A hidden receiver must not open a modal box at logon; the tray is
             // the only thing the user can see, so report it there.
