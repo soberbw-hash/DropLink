@@ -48,9 +48,26 @@ function Ensure-Aumid {
         if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
         New-ItemProperty -Path $key -Name 'DisplayName' -Value 'DropLink' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $key -Name 'IconBackgroundColor' -Value 'FF1F6FEB' -PropertyType String -Force | Out-Null
-        $exe = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'app\DropLink.exe'
-        if (Test-Path -LiteralPath $exe) {
-            New-ItemProperty -Path $key -Name 'IconUri' -Value $exe -PropertyType String -Force | Out-Null
+        # Point at the .ico, not the exe. The shell caches a resolved icon per
+        # path, so an IconUri that keeps pointing at DropLink.exe keeps serving
+        # the icon it cached the first time that path was seen - which is how a
+        # rebuilt app went on showing its old download-arrow icon in every
+        # notification while the tray and the window were already correct.
+        $app = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $ico = Join-Path $app 'app\DropLink.ico'
+        $exe = Join-Path $app 'app\DropLink.exe'
+        $wanted = if (Test-Path -LiteralPath $ico) { $ico }
+                  elseif (Test-Path -LiteralPath $exe) { $exe }
+                  else { '' }
+        if ($wanted) {
+            $current = ''
+            try { $current = [string](Get-ItemProperty -Path $key -Name 'IconUri' -ErrorAction Stop).IconUri } catch { }
+            if ($current -ne $wanted) {
+                New-ItemProperty -Path $key -Name 'IconUri' -Value $wanted -PropertyType String -Force | Out-Null
+                # Only when it actually changed: ie4uinit rebuilds the shell's
+                # icon cache, which is not something to run before every toast.
+                try { Start-Process -FilePath "$env:SystemRoot\System32\ie4uinit.exe" -ArgumentList '-show' -WindowStyle Hidden } catch { }
+            }
         }
     } catch { }
 }

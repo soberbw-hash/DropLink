@@ -23,6 +23,10 @@ public partial class App : System.Windows.Application
         // Self-contained: derive backend/driver paths even if launched by
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
+        // Before any window or tray icon exists: the shell reads this when the
+        // first window is created, and a later call would leave the taskbar and
+        // notifications on the path-derived identity (with its stale icon).
+        AppIdentity.Apply();
 
         // Dev-only: render the settings page to a PNG and exit, so a layout
         // regression is visible without clicking through the app. Placed before

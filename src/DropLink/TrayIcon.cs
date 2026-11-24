@@ -98,8 +98,13 @@ internal sealed class TrayIcon : IDisposable
     /// <summary>A background receiver reports problems here instead of a modal box.</summary>
     public void Notify(string title, string text)
     {
-        try { icon.ShowBalloonTip(5000, title, text, Forms.ToolTipIcon.Warning); }
-        catch (Exception) { /* balloons are best-effort */ }
+        // No tooltip icon: on Windows 10/11 a balloon is drawn by the toast
+        // platform, and ToolTipIcon.Warning put a yellow triangle next to
+        // "DropLink 已在后台接收" - a warning mark on a message that says
+        // everything is fine. The header icon is the app's own, resolved
+        // through the AUMID set in AppIdentity.
+        try { icon.ShowBalloonTip(5000, title, text, Forms.ToolTipIcon.None); }
+        catch (Exception) { /* notifications are best-effort */ }
     }
 
     /// <summary>
@@ -134,13 +139,18 @@ internal sealed class TrayIcon : IDisposable
         // 200%), so asking for 16 made the shell draw a 16px bitmap inside a
         // 24px slot: the icon sat visibly smaller than the apps next to it.
         var slot = TrayIconSize();
-        AppLog.Write($"tray icon requested at {slot.Width}x{slot.Height}");
         try
         {
             using var stream = typeof(TrayIcon).Assembly.GetManifestResourceStream("app.ico");
-            if (stream is not null) return new Icon(stream, slot);
+            if (stream is not null)
+            {
+                // Which source won is the difference between the new mark and a
+                // stale shell icon, and it cannot be seen from the tray alone.
+                AppLog.Write($"tray icon: embedded app.ico at {slot.Width}x{slot.Height}");
+                return new Icon(stream, slot);
+            }
         }
-        catch (Exception) { /* fall through */ }
+        catch (Exception error) { AppLog.Write("tray icon: embedded load failed: " + error.Message); }
         // Published builds also ship app\DropLink.ico next to the exe.
         try
         {
@@ -148,11 +158,17 @@ internal sealed class TrayIcon : IDisposable
             if (!string.IsNullOrWhiteSpace(path))
             {
                 var shipped = Path.Combine(Path.GetDirectoryName(path)!, "DropLink.ico");
-                if (File.Exists(shipped)) return new Icon(shipped, slot);
+                if (File.Exists(shipped))
+                {
+                    AppLog.Write($"tray icon: shipped {shipped} at {slot.Width}x{slot.Height}");
+                    return new Icon(shipped, slot);
+                }
+                AppLog.Write($"tray icon: extracted from {path} at {slot.Width}x{slot.Height}");
                 return Icon.ExtractAssociatedIcon(path) ?? SystemIcons.Application;
             }
         }
-        catch (Exception) { /* fall back to the stock icon */ }
+        catch (Exception error) { AppLog.Write("tray icon: file load failed: " + error.Message); }
+        AppLog.Write("tray icon: fell back to the stock application icon");
         return SystemIcons.Application;
     }
 
