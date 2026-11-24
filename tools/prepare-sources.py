@@ -29,17 +29,35 @@ def apply_patch(repo, patch, *flags):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('destination', type=pathlib.Path, help='new, non-existent directory')
+    parser.add_argument('--airdrop-only', action='store_true',
+                        help='prepare only the Python AirDrop tree for offline tests; skip devourer and OWL')
     args = parser.parse_args()
     dest = args.destination.resolve()
     dest.mkdir(parents=True, exist_ok=False)  # Never overwrite or reuse any existing tree.
-    for name, (url, revision) in REPOS.items():
+    repos = REPOS.items()
+    if args.airdrop_only:
+        repos = [(name, item) for name, item in REPOS.items() if name in ('dropbridge', 'winawdl')]
+    for name, (url, revision) in repos:
         repo = dest / name
         run('git', 'clone', '--no-checkout', url, repo)
         run('git', '-C', repo, 'checkout', '--detach', revision)
         actual = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
         if actual != revision:
             raise RuntimeError(f'{name}: incorrect revision {actual}')
-    bridge, win, dev = (dest / x for x in ('dropbridge', 'winawdl', 'devourer'))
+    bridge, win = dest / 'dropbridge', dest / 'winawdl'
+    if args.airdrop_only:
+        # The upstream host patch touches airdrop/identity.py, mdns.py and
+        # receiver.py; keep those hunks and skip the C/C++ and OWL gitlink.
+        apply_patch(win, bridge / 'patches/awdl-ipc-host.patch', '--include=airdrop/*')
+        for patch in (ROOT / 'patches/engine-default-directory.patch',
+                      ROOT / 'patches/atomic-file-publish.patch',
+                      ROOT / 'patches/engine-proxy-mode.patch',
+                      ROOT / 'patches/windows-reject-response.patch'):
+            apply_patch(win, patch)
+        apply_patch(win, bridge / 'patches/airdrop-identity.patch', '--reverse', '--check')
+        print('Prepared airdrop-only tree for offline tests. No radio, driver or network settings were changed.')
+        return
+    dev = dest / 'devourer'
     run('git', '-C', win, 'submodule', 'update', '--init', '--recursive', 'upstream/owl')
     owl = win / 'upstream/owl'
     actual = subprocess.check_output(['git', '-C', str(owl), 'rev-parse', 'HEAD'], text=True).strip()

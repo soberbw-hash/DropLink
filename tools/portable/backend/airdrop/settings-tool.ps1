@@ -109,6 +109,67 @@ function Run-Doctor {
     }
 }
 
+function Get-DoctorData {
+    $s = Read-Settings
+    $h = Read-JsonFile $hardwarePath
+    $nics = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'VID_0BDA&PID_C811|VID_0BDA&PID_C820' })
+    $nicItems = @()
+    foreach ($d in $nics) {
+        $nicItems += [pscustomobject]@{
+            instance = [string]$d.InstanceId
+            service  = [string](Prop $d.InstanceId 'DEVPKEY_Device_Service')
+            status   = [string]$d.Status
+            inf      = [string](Prop $d.InstanceId 'DEVPKEY_Device_DriverInfPath')
+            driver   = [string](Prop $d.InstanceId 'DEVPKEY_Device_DriverVersion')
+            location = [string](Prop $d.InstanceId 'DEVPKEY_Device_LocationInfo')
+        }
+    }
+    $log = if (Test-Path -LiteralPath $logPath) {
+        $item = Get-Item -LiteralPath $logPath
+        [pscustomobject]@{ file = 'OK'; bytes = $item.Length; updated = $item.LastWriteTime.ToString('s') }
+    } else {
+        [pscustomobject]@{ file = 'MISSING'; bytes = 0; updated = $null }
+    }
+    [pscustomobject]@{
+        schema   = 'droplink.doctor/1'
+        time     = (Get-Date -Format s)
+        computer = $env:COMPUTERNAME
+        os       = (OsLabel)
+        root     = $root
+        app      = [pscustomobject]@{ exe = (FileState (Join-Path $root 'app\DropLink.exe')) }
+        backend  = [pscustomobject]@{
+            radio  = (FileState (Join-Path $root 'backend\airbridge_radio.exe'))
+            bridge = (FileState (Join-Path $root 'backend\radio_pipe_bridge.exe'))
+            netd   = (FileState (Join-Path $root 'backend\awdl_netd.exe'))
+            awdld  = (FileState (Join-Path $root 'backend\awdld.exe'))
+            python = (FileState (Join-Path $root 'backend\python\python.exe'))
+            engine = (FileState (Join-Path $root 'backend\airdrop\engine.py'))
+        }
+        settings = [pscustomobject]@{
+            file         = (FileState $settingsPath)
+            device_name  = [string]$s.device_name
+            auto_receive = $s.auto_receive
+            live_copy    = $s.live_photo_still_copy
+            format_hint  = $s.show_format_in_notification
+        }
+        hardware = [pscustomobject]@{
+            file           = (FileState $hardwarePath)
+            allow_untested = $h.allow_untested
+            devices        = @($h.devices).Count
+        }
+        nics      = $nicItems
+        link      = [pscustomobject]@{ tcp8771 = (TcpState 8771); udp15353 = (UdpState 15353) }
+        processes = [pscustomobject]@{
+            radio  = (ProcState 'airbridge_radio')
+            bridge = (ProcState 'radio_pipe_bridge')
+            netd   = (ProcState 'awdl_netd')
+            awdld  = (ProcState 'awdld')
+            engine = (ProcState 'python')
+        }
+        log = $log
+    }
+}
+
 switch ($Action) {
     'get' {
         $s = Read-Settings
@@ -147,6 +208,7 @@ switch ($Action) {
         if ($svc -eq 'WinUSB' -and $dev.Status -eq 'OK') { Write-Output ("READY " + $msg.Ok) } else { Write-Output ("NOT_READY " + $msg.Check) }
     }
     'doctor' { Run-Doctor }
+    'doctor-json' { Get-DoctorData | ConvertTo-Json -Depth 6 }
     'testcard' {
         $card = Join-Path $PSScriptRoot 'test-card.ps1'
         if (-not (Test-Path -LiteralPath $card)) { throw 'test-card.ps1 is missing' }
