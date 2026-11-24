@@ -1,0 +1,7 @@
+{
+  "_comment": "由「设置 DropLink.cmd」管理。device_name 留空时使用计算机名；auto_receive 为 true 时不弹确认框自动收；live_photo_still_copy 会为实况图额外生成一张普通静态图副本；show_format_in_notification 在通知里显示电脑支持的文件类型。",
+  "device_name": "",
+  "auto_receive": true,
+  "live_photo_still_copy": true,
+  "show_format_in_notification": true
+}
