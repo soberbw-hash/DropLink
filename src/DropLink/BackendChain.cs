@@ -59,11 +59,15 @@ internal sealed class BackendChain : IAsyncDisposable
             Directory.CreateDirectory(sessionDirectory);
             // The radio spends ~45 s on firmware + BB/RF init before it serves
             // its TCP port, so the budget is generous and readiness is also
-            // confirmed by probing the port (see StartStage).
-            Stage?.Invoke("正在初始化无线电（固件与射频，约 40~60 秒）…");
+            // confirmed by probing the port (see StartStage). Measured on this
+            // machine: 76 s after a clean boot, but up to ~4 min when the
+            // adapter had just been released by a previous run. 150 s used to
+            // cut that second case off and report a failure for a radio that
+            // was merely slow, which then read as "iPhone 又搜不到了".
+            Stage?.Invoke("正在初始化无线电（固件与射频，通常 1 分钟，偶尔要几分钟）…");
             AppLog.Mark("radio:start");
             await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
-                "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(150), cancel,
+                "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(300), cancel,
                 RadioListeningAsync).ConfigureAwait(false);
             AppLog.Mark("radio:ready");
             Stage?.Invoke("正在启动无线桥接…");

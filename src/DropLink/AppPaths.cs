@@ -54,6 +54,10 @@ internal static class AppPaths
             Fill("DROPLINK_ENGINE_SCRIPT", Path.Combine(flat, "airdrop", "engine.py"));
             FillDirectory("DROPLINK_OUTPUT_DIR", Path.Combine(work.FullName, "data", "received"));
             FillDirectory("DROPLINK_KEYS_DIR", Path.Combine(work.FullName, "data", "keys"));
+            // The launcher sets this; a direct exe start (the scheduled task,
+            // a shortcut) does not, and then the engine's log silently lands
+            // nowhere. Diagnosis needs that file.
+            FillDirectory("DROPLINK_LOG_DIR", Path.Combine(work.FullName, "data", "logs"));
             Fill("DROPLINK_HARDWARE_FILE", Path.Combine(work.FullName, "data", "hardware.json"));
             FillValue("DROPLINK_DEVICE_NAME", "DropLink");
 

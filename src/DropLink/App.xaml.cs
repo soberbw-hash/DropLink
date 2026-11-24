@@ -21,6 +21,12 @@ public partial class App : System.Windows.Application
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
 
+        // A portable app that can only be started from a .cmd does not read as
+        // a real program. The shortcut is written by the shell itself, so it is
+        // an ordinary .lnk that Explorer, the Start menu and "pin to taskbar"
+        // all accept - a hand-built file is rejected by half of them.
+        EnsureDesktopShortcut();
+
         // Driver binding needs an administrator token. The manifest already
         // asks for one, but if it was bypassed (shortcut, filtered parent) the
         // app would silently fail at the first click. Relaunch once, elevated.
@@ -53,10 +59,13 @@ public partial class App : System.Windows.Application
 
         // A second launch should bring the existing window back, not start a
         // second receiver. The named event wakes the first instance.
+        //
+        // Send, not ApplicationIdle: the idle queue only drains when nothing
+        // else is pending, and a receiver that is busy starting a chain can go
+        // minutes without draining it. That is how double-clicking the icon
+        // produced nothing while the app was in fact running.
         singleInstance = new SingleInstance(() =>
-            _ = Dispatcher.InvokeAsync(
-                () => (MainWindow as MainWindow)?.ShowFromTray(),
-                DispatcherPriority.ApplicationIdle));
+            _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(ShowExistingWindow)));
         if (!singleInstance.IsFirst)
         {
             Shutdown();
@@ -104,6 +113,62 @@ public partial class App : System.Windows.Application
         {
             window.Show();
         }
+    }
+
+    // Written once, and never overwritten: a shortcut the user renamed or moved
+    // is theirs, and silently recreating it every launch would be its own kind
+    // of rude. Failure is logged and ignored - the receiver still has to work.
+    private static void EnsureDesktopShortcut()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exe)) return;
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (string.IsNullOrWhiteSpace(desktop)) return;
+            var link = Path.Combine(desktop, "DropLink.lnk");
+            if (File.Exists(link)) return;
+
+            var shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType is null) return;
+            dynamic shell = Activator.CreateInstance(shellType)!;
+            dynamic shortcut = shell.CreateShortcut(link);
+            shortcut.TargetPath = exe;
+            shortcut.WorkingDirectory = Path.GetDirectoryName(exe);
+            shortcut.IconLocation = exe + ",0";
+            shortcut.Description = "DropLink - iPhone 隔空投送接收器";
+            shortcut.Save();
+            AppLog.Write("desktop shortcut created: " + link);
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("desktop shortcut failed: " + error.Message);
+        }
+    }
+
+    // A wake-up can beat the window construction by a few milliseconds at
+    // logon, so a missing window is retried instead of silently dropped. The
+    // whole point of the signal is that the user ends up with something on
+    // screen; a wake-up that does nothing is indistinguishable from a hang.
+    private void ShowExistingWindow()
+    {
+        if (MainWindow is MainWindow ready)
+        {
+            ready.ShowFromTray();
+            return;
+        }
+        _ = Task.Run(async () =>
+        {
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                await Task.Delay(100);
+                var window = Dispatcher.Invoke(() => MainWindow as MainWindow);
+                if (window is null) continue;
+                _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(window.ShowFromTray));
+                return;
+            }
+            AppLog.Write("activate requested but no window exists yet");
+        });
     }
 
     protected override void OnExit(ExitEventArgs e)

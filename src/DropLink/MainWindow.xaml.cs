@@ -556,10 +556,14 @@ public partial class MainWindow : Window
     private async Task StartReceiveAsync(bool silent)
     {
         if (exitRequested) return;
+        // Something is already receiving. Starting a second one can only fight
+        // the first, and the failure path below used to tear that first one
+        // down - a healthy chain killed by a redundant attempt.
+        if (session is not null) return;
         // The radio needs ~45 s of firmware + RF init before the chain is up,
         // so say so instead of appearing frozen.
-        ShowProgress("正在初始化网卡（约 40~60 秒），请不要关闭窗口…");
-        SetStatus(LinkStatus.Working, "正在初始化网卡", "约 40~60 秒，完成后自动开始接收");
+        ShowProgress("正在初始化网卡（通常 1 分钟，偶尔要几分钟），请不要关闭窗口…");
+        SetStatus(LinkStatus.Working, "正在初始化网卡", "通常 1 分钟，完成后自动开始接收");
         AppLog.Mark("session:start requested");
         try
         {
@@ -586,13 +590,22 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            // A failed start must not leave a half-built session behind: that is
-            // what made the next click report "接收会话已经启动" while no backend
-            // process was actually running.
-            await CloseSessionAsync();
-            // The user asked to quit while the chain was still coming up: there
-            // is nothing worth reporting to a window that is already closing.
+            // Deliberately no CloseSessionAsync() here. StartSessionAsync already
+            // disposes the session it created when its own start fails, and this
+            // catch also runs for failures that have nothing to do with the
+            // chain - a 15 s PnP query timeout, for one. Closing unconditionally
+            // killed a receiver that was already up and working, which is what
+            // made the iPhone lose sight of this PC mid-session.
             if (exitRequested) return;
+            // The chain came up; only the follow-up status refresh failed. It
+            // would be a lie the user can see through to print "启动失败" while
+            // the receiver is running.
+            if (session is not null)
+            {
+                AppLog.Write("post-start refresh failed: " + ex.Message);
+                SetStatus(LinkStatus.Working, "正在启动接收", "状态刷新失败：" + ex.Message);
+                return;
+            }
             // Layered error: which stage, what happened, where to look. One
             // opaque sentence is what made every past failure a guessing game.
             var stage = string.IsNullOrWhiteSpace(lastStage)
@@ -764,7 +777,11 @@ public partial class MainWindow : Window
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command", script }) info.ArgumentList.Add(arg);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("无法启动设备查询。");
         var stdout = process.StandardOutput.ReadToEndAsync(); var stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // 45 s, not 15: this query competes with four backends that are still
+        // initialising the radio, and a PowerShell start plus a full PnP
+        // enumeration on a busy machine regularly takes longer than 15 s. The
+        // old limit turned a slow diagnostic into a failed start.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         try { await process.WaitForExitAsync(timeout.Token); } catch (OperationCanceledException) { process.Kill(true); throw new TimeoutException("设备查询超时。"); }
         var json = await stdout; _ = await stderr;
         if (process.ExitCode != 0) throw new InvalidOperationException("设备查询失败。");
