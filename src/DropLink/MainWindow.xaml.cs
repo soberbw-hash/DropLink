@@ -175,6 +175,15 @@ public partial class MainWindow : Window
         ReceiveStatus.Visibility = detailsVisible ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    // Show an operation result where the user can actually see it. The details
+    // box is hidden by default, so writing to Text alone looks like "nothing happened".
+    private void ShowDetails(string message)
+    {
+        ReceiveStatus.Text = message;
+        detailsVisible = true;
+        ReceiveStatus.Visibility = Visibility.Visible;
+    }
+
     private async void CheckReadiness_Click(object sender, RoutedEventArgs e) => await CheckReadinessAsync();
 
     // Even when enabled, starting still goes through ReceiverSession ->
@@ -222,11 +231,10 @@ public partial class MainWindow : Window
             return;
         }
         var answer = MessageBox.Show(this,
-            "即将把 0BDA:C811 网卡从临时 WinUSB 绑定恢复为原厂 Realtek 驱动。\n\n" +
-            "· 系统会弹出管理员授权（UAC）窗口，请点“是”；\n" +
-            "· 随后命令行会要求输入 RESTORE 并回车确认；\n" +
-            "· 恢复后该网卡可重新作为普通 Wi-Fi 使用。\n\n确定继续吗？",
-            "回退驱动", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            "恢复网卡为原厂 Realtek 驱动。\n\n" +
+            "接下来会弹管理员授权，请点“是”；\n" +
+            "然后在新窗口输入 RESTORE 回车。\n\n确定继续？",
+            "回退驱动", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
         if (answer != MessageBoxResult.Yes) return;
         try
         {
@@ -234,9 +242,15 @@ public partial class MainWindow : Window
             psi.ArgumentList.Add("/c");
             psi.ArgumentList.Add($"\"{script}\"");
             Process.Start(psi);
-            ReceiveStatus.Text = "已请求管理员权限运行回退脚本。请在弹出窗口中按提示输入 RESTORE。";
+            ShowDetails("已请求管理员权限。请在弹出的黑色窗口点“是”，再输入 RESTORE 回车。");
         }
-        catch (Exception ex) { ReceiveStatus.Text = "无法启动回退脚本：" + ex.Message; }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                "无法启动回退脚本：" + ex.Message +
+                "\n\n请手动右键运行：work\\_backup\\droplink-driver-20261124\\回退驱动.cmd，选“以管理员身份运行”。",
+                "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     // One-time driver setup changes the system binding, so it is never implicit.
@@ -254,23 +268,29 @@ public partial class MainWindow : Window
             return;
         }
         var answer = MessageBox.Show(this,
-            "即将把 0BDA:C811 网卡切换到 WinUSB 驱动，这是接收 AirDrop 的必要一次性步骤：\n\n" +
-            "· 脚本会导入本地签名证书（系统级信任，可回退）；\n" +
-            "· 两块同型号网卡都会切换；上网走以太网，不受影响；\n" +
-            "· 系统会弹管理员授权（UAC），请点“是”；随后输入 SWITCH 回车；\n" +
-            "· 完成后可能要拔插一次网卡，再回来点“检查接收条件”。\n\n" +
-            "随时可用红色“回退驱动”按钮恢复原厂驱动。确定继续吗？",
-            "一键换 WinUSB", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            "切换网卡到 WinUSB（接收 AirDrop 必需，一次性）。\n\n" +
+            "接下来会弹管理员授权，请点“是”；\n" +
+            "然后在新窗口输入 SWITCH 回车。\n\n" +
+            "随时可点红色“回退驱动”还原。确定继续？",
+            "一键换 WinUSB", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
         if (answer != MessageBoxResult.Yes) return;
         try
         {
             var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = true, Verb = "runas" };
             psi.ArgumentList.Add("/c");
             psi.ArgumentList.Add($"\"{script}\"");
-            Process.Start(psi);
-            ReceiveStatus.Text = "已请求管理员权限运行换驱动脚本。请在弹出窗口输入 SWITCH；完成后回来点“检查接收条件”。";
+            var proc = Process.Start(psi);
+            ShowDetails("已请求管理员权限。请在弹出的黑色窗口点“是”，再输入 SWITCH 回车。\n\n" +
+                "如果没弹出窗口，说明系统的安全软件拦截了提权——请手动右键脚本“以管理员身份运行”。");
+            _ = proc;
         }
-        catch (Exception ex) { ReceiveStatus.Text = "无法启动换驱动脚本：" + ex.Message; }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                "无法启动换驱动脚本：" + ex.Message +
+                "\n\n请手动右键运行：work\\_backup\\droplink-driver-20261124\\一键换WinUSB.cmd，选“以管理员身份运行”。",
+                "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     // Pick a usable radio: any supported, healthy card bound to WinUSB is a

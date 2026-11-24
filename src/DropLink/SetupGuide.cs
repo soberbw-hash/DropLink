@@ -37,21 +37,22 @@ internal static class SetupGuide
 
     internal static SetupGuideResult Evaluate(Input input)
     {
-        // Environment first: if the four backend components are not all present
-        // the user most likely launched the exe directly instead of the script.
+        // Environment first: the four backend exe files must exist on disk.
+        // They are NOT in the GitHub repo - they live in work/prepared-next next
+        // to the DropLink folder. A fresh clone on another PC will not have them.
         var files = input.RequiredFiles;
         if (files.Count < 4 || files.Any(string.IsNullOrWhiteSpace) || files.Any(f => !File.Exists(f)))
             return new SetupGuideResult(
                 GuideStep.EnvironmentBlocked, "准备阶段",
-                "后端组件还没找到",
-                "请关掉本窗口，双击项目里的「启动软件.cmd」重新打开。它会配置好四个后端组件的路径；直接双击 exe 不会出现在本引导。",
+                "后端组件缺失（换电脑没拷全）",
+                "软件需要 4 个后端程序才能工作，它们不在 GitHub 仓库里。如果你是换电脑或新克隆，请把原电脑 work 文件夹下的 prepared-next 和 _backup 两个文件夹整个拷过来，和 DropLink 保持同级（目录结构和原来一模一样），再重新打开本软件。点启动脚本无法生成这些文件。",
                 "重新检查", true);
 
         if (!input.Authorized || !input.RecoveryVerified)
             return new SetupGuideResult(
                 GuideStep.NeedRestart, "准备阶段",
-                "需要用启动脚本重新打开",
-                "授权状态与驱动回退确认没有生效。请关掉本窗口，双击「启动软件.cmd」重新打开即可。",
+                "需要重新打开本软件",
+                "授权状态与驱动回退确认没有生效。关掉本窗口，重新打开「启动软件.cmd」或「启动软件.vbs」即可。",
                 "重新检查", true);
 
         if (input.SessionRunning)
