@@ -28,7 +28,9 @@ public partial class App : System.Windows.Application
         // regression is visible without clicking through the app. Placed before
         // the single-instance and stale-chain logic on purpose: a preview must
         // not disturb a receiver that is already running.
+        if (TryPreviewMain(e.Args)) { Shutdown(); return; }
         if (TryPreviewSettings(e.Args)) { Shutdown(); return; }
+        if (TryPreviewSetup(e.Args)) { Shutdown(); return; }
 
         // A portable app that can only be started from a .cmd does not read as
         // a real program. The shortcut is written by the shell itself, so it is
@@ -200,6 +202,94 @@ public partial class App : System.Windows.Application
             Name = "DropLink startup watchdog"
         };
         thread.Start();
+    }
+
+    // `DropLink.exe --preview-main out.png [state]` renders one main-window
+    // state and exits. The window's job is to say exactly one true thing, and
+    // that cannot be reviewed from source - the same reason the settings page
+    // has a preview switch.
+    private static bool TryPreviewMain(string[] args)
+    {
+        var index = Array.FindIndex(args, a => a.Equals("--preview-main", StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        if (index + 1 >= args.Length) return true;
+        var target = args[index + 1];
+        var state = index + 2 < args.Length && !args[index + 2].StartsWith("--", StringComparison.Ordinal)
+            ? args[index + 2] : "waiting";
+        try
+        {
+            var window = new MainWindow(previewOnly: true) { ShowInTaskbar = false };
+            window.Show();
+            window.PreviewState(state);
+            window.UpdateLayout();
+            var root = (FrameworkElement)window.Content;
+            root.UpdateLayout();
+            var width = (int)Math.Ceiling(root.ActualWidth);
+            var height = (int)Math.Ceiling(root.ActualHeight);
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                Math.Max(width, 1), Math.Max(height, 1), 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(root);
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+            using (var stream = File.Create(target)) encoder.Save(stream);
+            AppLog.Write($"preview-main wrote {target} ({width}x{height}, state={state})");
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("preview-main failed: " + error.Message);
+        }
+        return true;
+    }
+
+    // `DropLink.exe --preview-setup out.png 2` renders one screen of the first-run
+    // flow. The facts on it are probed for real, so the PNG cannot show a state
+    // the window would never reach.
+    private static bool TryPreviewSetup(string[] args)
+    {
+        var index = Array.FindIndex(args, a => a.Equals("--preview-setup", StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        if (index + 1 >= args.Length) return true;
+        var target = args[index + 1];
+        var step = index + 2 < args.Length && int.TryParse(args[index + 2], out var parsed) ? parsed : 1;
+        try
+        {
+            var window = new SetupWindow(() => Task.FromResult((false, "预览"))) { ShowInTaskbar = false };
+            window.Show();
+            var dispatcher = Current.Dispatcher;
+            var frame = new DispatcherFrame();
+            var giveUp = new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Normal,
+                (_, _) => frame.Continue = false, dispatcher);
+            giveUp.Start();
+            _ = window.PreviewAsync(step).ContinueWith(_ => dispatcher.BeginInvoke(
+                new Action(() => frame.Continue = false)));
+            Dispatcher.PushFrame(frame);
+            giveUp.Stop();
+            // The window resizes once when the probe fills the body in; measuring
+            // before that yields a bitmap that cuts the button row off.
+            dispatcher.Invoke(new Action(() => { }), DispatcherPriority.ApplicationIdle);
+            window.UpdateLayout();
+
+            var root = (FrameworkElement)window.Content;
+            root.UpdateLayout();
+            var width = (int)Math.Ceiling(root.ActualWidth);
+            var height = (int)Math.Ceiling(root.ActualHeight);
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                Math.Max(width, 1), Math.Max(height, 1), 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(root);
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+            using (var stream = File.Create(target)) encoder.Save(stream);
+            AppLog.Write($"preview-setup wrote {target} ({width}x{height}, step={step})");
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("preview-setup failed: " + error.Message);
+        }
+        return true;
     }
 
     // `DropLink.exe --preview-settings out.png` renders the settings page exactly

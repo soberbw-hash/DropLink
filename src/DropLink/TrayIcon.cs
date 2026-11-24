@@ -17,16 +17,19 @@ internal sealed class TrayIcon : IDisposable
     private readonly Window window;
     private readonly Forms.NotifyIcon icon;
     private readonly Forms.ToolStripMenuItem statusItem;
+    private readonly Forms.ToolStripMenuItem pauseItem;
 
-    public TrayIcon(Window window, Action exit, Action openSettings)
+    public TrayIcon(Window window, Action exit, Action openSettings, Action togglePause, Func<bool> isPaused)
     {
         this.window = window;
         // The first item restates the header, so a right-click answers "还在收吗"
         // without opening anything. It is disabled: it is a readout, not a verb.
         statusItem = new Forms.ToolStripMenuItem("状态：正在启动") { Enabled = false };
         var menu = new Forms.ContextMenuStrip { ShowImageMargin = false };
-        var open = new Forms.ToolStripMenuItem("打开主界面");
+        var open = new Forms.ToolStripMenuItem("打开 DropLink");
         open.Click += (_, _) => ShowWindow();
+        pauseItem = new Forms.ToolStripMenuItem("暂停接收");
+        pauseItem.Click += (_, _) => togglePause();
         var settings = new Forms.ToolStripMenuItem("设置");
         // Opens the in-app page. It used to launch settings-gui.ps1, which put a
         // PowerShell console on screen and a second, differently styled form on
@@ -41,8 +44,9 @@ internal sealed class TrayIcon : IDisposable
         menu.Items.Add(statusItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(open);
-        menu.Items.Add(settings);
+        menu.Items.Add(pauseItem);
         menu.Items.Add(folder);
+        menu.Items.Add(settings);
         menu.Items.Add(diagnostics);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(quit);
@@ -55,6 +59,14 @@ internal sealed class TrayIcon : IDisposable
             ContextMenuStrip = menu
         };
         icon.DoubleClick += (_, _) => ShowWindow();
+        SetPaused(isPaused());
+    }
+
+    /// <summary>The menu item says what the next click does, not what the state is.</summary>
+    public void SetPaused(bool paused)
+    {
+        try { pauseItem.Text = paused ? "恢复接收" : "暂停接收"; }
+        catch (Exception) { /* keep the previous text */ }
     }
 
     public void ShowWindow()
@@ -146,9 +158,7 @@ internal sealed class TrayIcon : IDisposable
 
     private static void OpenReceiveFolder()
     {
-        var folder = Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR");
-        if (string.IsNullOrWhiteSpace(folder))
-            folder = Path.Combine(PortableRoot(), "data", "received");
+        var folder = SettingsFile.ReceiveFolder();
         Directory.CreateDirectory(folder);
         Process.Start(new ProcessStartInfo("explorer.exe", "\"" + folder + "\"")
         {
@@ -219,14 +229,7 @@ internal sealed class TrayIcon : IDisposable
         catch (Exception) { /* opening a folder is best-effort */ }
     }
 
-    private static string PortableRoot()
-    {
-        var exe = Environment.ProcessPath;
-        var appDir = string.IsNullOrWhiteSpace(exe)
-            ? AppContext.BaseDirectory
-            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
-        return Directory.GetParent(appDir)?.FullName ?? appDir;
-    }
+    private static string PortableRoot() => AppPaths.PortableRoot();
 
     public void Dispose()
     {

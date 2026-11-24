@@ -1,0 +1,115 @@
+<Window x:Class="DropLink.SetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DropLink 首次配置" Width="560" Height="520" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{StaticResource PageBackground}" FontFamily="{StaticResource AppFont}"
+        UseLayoutRounding="True">
+ <Window.Resources>
+  <Style x:Key="StepDot" TargetType="Ellipse">
+   <Setter Property="Width" Value="7"/>
+   <Setter Property="Height" Value="7"/>
+   <Setter Property="Margin" Value="0,0,7,0"/>
+   <Setter Property="Fill" Value="{StaticResource Divider}"/>
+  </Style>
+  <Style x:Key="Card" TargetType="Border">
+   <Setter Property="Background" Value="{StaticResource Surface}"/>
+   <Setter Property="CornerRadius" Value="14"/>
+   <Setter Property="Padding" Value="20,16"/>
+   <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+   <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+ </Window.Resources>
+
+ <!-- Padding lives on the root Border, not as a margin on the Grid: the window
+      then has one visual that covers the whole client area, which is also what
+      the setup preview switch renders. -->
+ <Border Background="{StaticResource PageBackground}" Padding="32,26,32,22">
+ <Grid>
+  <Grid.RowDefinitions>
+   <RowDefinition Height="Auto"/>
+   <RowDefinition Height="*"/>
+   <RowDefinition Height="Auto"/>
+  </Grid.RowDefinitions>
+
+  <!-- Four dots, no sidebar and no menu: the whole flow is four screens and
+       the user should be able to see that from the first one. -->
+  <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,18">
+   <Ellipse x:Name="Dot1" Style="{StaticResource StepDot}"/>
+   <Ellipse x:Name="Dot2" Style="{StaticResource StepDot}"/>
+   <Ellipse x:Name="Dot3" Style="{StaticResource StepDot}"/>
+   <Ellipse x:Name="Dot4" Style="{StaticResource StepDot}"/>
+   <TextBlock x:Name="StepCount" Style="{StaticResource Caption}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+  </StackPanel>
+
+  <!-- Body. Fixed window height, so the buttons never move between steps and
+       the window does not resize as the copy changes. -->
+  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <StackPanel>
+    <TextBlock x:Name="StepTitle" FontSize="22" FontWeight="Medium"
+               Foreground="{StaticResource TextPrimary}" TextWrapping="Wrap"/>
+    <TextBlock x:Name="StepDetail" Style="{StaticResource BodyText}" Margin="0,10,0,0" TextWrapping="Wrap"/>
+
+    <!-- Facts: what was actually found on this machine, not a promise. -->
+    <Border x:Name="FactsCard" Style="{StaticResource Card}" Margin="0,18,0,0" Visibility="Collapsed">
+     <StackPanel>
+      <TextBlock x:Name="FactLine1" Style="{StaticResource RowTitle}" TextWrapping="Wrap"/>
+      <TextBlock x:Name="FactLine2" Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+      <TextBlock x:Name="FactLine3" Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,4,0,0"
+                 Visibility="Collapsed"/>
+     </StackPanel>
+    </Border>
+
+    <!-- Step 3: the only place the flow asks the user to decide anything. -->
+    <Border x:Name="PreferenceCard" Style="{StaticResource Card}" Margin="0,18,0,0" Visibility="Collapsed">
+     <StackPanel>
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <StackPanel Grid.Column="0" Margin="0,0,18,0">
+        <TextBlock Text="自动接收" Style="{StaticResource RowTitle}"/>
+        <TextBlock Text="手机发过来就直接收下，不弹确认框。关掉的话每次都要你点一下。" Style="{StaticResource RowHint}"/>
+       </StackPanel>
+       <CheckBox x:Name="AutoReceiveSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"/>
+      </Grid>
+
+      <Border Style="{StaticResource Hairline}" Margin="0,14"/>
+
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <StackPanel Grid.Column="0" Margin="0,0,18,0">
+        <TextBlock Text="保存位置" Style="{StaticResource RowTitle}"/>
+        <TextBlock x:Name="FolderText" Style="{StaticResource RowHint}" TextTrimming="CharacterEllipsis" MaxWidth="330"/>
+       </StackPanel>
+       <Button Grid.Column="1" Content="更改" Style="{StaticResource GhostButton}" VerticalAlignment="Center" Click="ChangeFolder_Click"/>
+      </Grid>
+
+      <Border Style="{StaticResource Hairline}" Margin="0,14"/>
+
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <StackPanel Grid.Column="0" Margin="0,0,18,0">
+        <TextBlock Text="在 iPhone 上显示的名字" Style="{StaticResource RowTitle}"/>
+        <TextBlock Text="留空就用电脑名。" Style="{StaticResource RowHint}"/>
+       </StackPanel>
+       <TextBox x:Name="NameBox" Grid.Column="1" Width="190" Padding="9,7" FontSize="13.5"
+                Foreground="{StaticResource TextPrimary}" Background="{StaticResource SurfaceMuted}"
+                BorderBrush="{StaticResource Border}" BorderThickness="1"
+                VerticalContentAlignment="Center" MaxLength="40"/>
+      </Grid>
+     </StackPanel>
+    </Border>
+   </StackPanel>
+  </ScrollViewer>
+
+  <Grid Grid.Row="2" Margin="0,18,0,0">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <!-- Fixed height keeps the buttons from moving when a note appears. -->
+   <TextBlock x:Name="NoteText" Grid.Column="0" Style="{StaticResource Caption}"
+              TextWrapping="Wrap" MinHeight="18" VerticalAlignment="Center" Margin="0,0,14,0"/>
+   <Button x:Name="BackButton" Grid.Column="1" Content="上一步" Style="{StaticResource GhostButton}"
+           Margin="0,0,10,0" Click="Back_Click"/>
+   <Button x:Name="NextButton" Grid.Column="2" Content="继续" Style="{StaticResource PrimaryButton}" Click="Next_Click"/>
+  </Grid>
+ </Grid>
+ </Border>
+</Window>

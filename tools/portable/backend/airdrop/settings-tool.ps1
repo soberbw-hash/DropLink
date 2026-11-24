@@ -37,6 +37,35 @@ function Read-JsonFile([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return @{} }
     try { return (Get-Content -Raw -Encoding utf8 -LiteralPath $path | ConvertFrom-Json) } catch { return @{} }
 }
+# Everything a support bundle must not carry about this particular machine.
+# Install path first so a path inside it does not get half-replaced by the
+# home-folder rule.
+function Get-Redactions {
+    $pairs = @()
+    # JSON-escaped spellings first: inside settings.json the separator is '\\',
+    # so the plain path never matches there and the home folder would survive.
+    $pairs += ,@($root.Replace('\', '\\'), '<install>')
+    $pairs += ,@($root.Replace('\', '/'), '<install>')
+    $pairs += ,@($root, '<install>')
+    $homeDir = [Environment]::GetFolderPath('UserProfile')
+    if ($homeDir) {
+        $pairs += ,@($homeDir.Replace('\', '\\'), '<home>')
+        $pairs += ,@($homeDir.Replace('\', '/'), '<home>')
+        $pairs += ,@($homeDir, '<home>')
+    }
+    if ($env:COMPUTERNAME) { $pairs += ,@($env:COMPUTERNAME, '<pc>') }
+    if ($env:USERNAME) { $pairs += ,@($env:USERNAME, '<user>') }
+    return $pairs
+}
+function Redact-Text([string]$text) {
+    if (-not $text) { return $text }
+    foreach ($pair in (Get-Redactions)) {
+        if ($pair[0]) { $text = $text.Replace($pair[0], $pair[1]) }
+    }
+    $text = [regex]::Replace($text, '(?i)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}', '<mac>')
+    $text = [regex]::Replace($text, '(?i)fe80(?::[0-9a-f]{0,4}){1,7}%\d+', '<addr>')
+    return $text
+}
 function Read-Settings { return Read-JsonFile $settingsPath }
 function Write-Settings($obj) {
     $json = $obj | ConvertTo-Json -Depth 5
@@ -238,7 +267,9 @@ switch ($Action) {
     'doctor-json' { Get-DoctorData | ConvertTo-Json -Depth 6 }
     'export-diagnostics' {
         # One zip a user can send for support: logs, doctor snapshot, settings.
-        # Never includes data\keys (TLS material) or received files.
+        # Never includes data\keys (TLS material) or received files, and every
+        # copied text file is scrubbed first - a support bundle is the last
+        # place that should carry somebody's home folder, account name or MAC.
         $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
         $logDir = Join-Path $root 'data\logs'
         $items = @()
@@ -261,7 +292,35 @@ switch ($Action) {
         if ($items.Count -eq 0) { throw 'nothing to export' }
         $out = Join-Path $root ('data\diagnostics-' + $stamp + '.zip')
         if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Force }
-        Compress-Archive -LiteralPath $items -DestinationPath $out -Force
+        $stage = Join-Path $env:TEMP ('droplink-diag-' + $stamp)
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+        try {
+            foreach ($p in $items) {
+                $dest = Join-Path $stage (Split-Path -Leaf $p)
+                $text = ''
+                try { $text = [System.IO.File]::ReadAllText($p) } catch { $text = '' }
+                if ($text) {
+                    [System.IO.File]::WriteAllText($dest, (Redact-Text $text),
+                        (New-Object System.Text.UTF8Encoding($false)))
+                }
+            }
+            $note = @(
+                'DropLink diagnostics',
+                '',
+                'Included: logs, settings, hardware snapshot, doctor snapshot.',
+                'Scrubbed: install path -> <install>, home folder -> <home>,',
+                '          computer name -> <pc>, MAC -> <mac>, link-local address -> <addr>.',
+                'Not included: received files, thumbnails, data\keys, history.json.',
+                '',
+                'Received file names may still appear inside log lines.'
+            ) -join "`r`n"
+            [System.IO.File]::WriteAllText((Join-Path $stage 'README.txt'), $note,
+                (New-Object System.Text.UTF8Encoding($false)))
+            Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $out -Force
+        } finally {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
         Write-Output ('OK ' + $out)
     }
     'testcard' {

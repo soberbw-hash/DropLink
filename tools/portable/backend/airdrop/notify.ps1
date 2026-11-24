@@ -10,6 +10,7 @@ param(
     [string]$ClipLabelB64 = '~',
     [string]$ImageB64 = '~',
     [string]$SelectB64 = '~',
+    [string]$BatchB64 = '~',
     # A failure notice has nothing to open and nothing to copy. Two blank
     # buttons would be worse than none.
     [switch]$NoActions
@@ -138,6 +139,11 @@ try {
     # The file the "open folder" button should select. Opening the folder alone
     # leaves the user hunting for one UUID-named photo among many.
     $selectName = From-B64 $SelectB64
+    # History id. The toast buttons carry this instead of a bare path: a
+    # protocol URI can be invoked by anything on the machine, so it must not be
+    # able to aim Explorer at an arbitrary folder. The handler resolves the id
+    # against the local history and only ever opens what DropLink received.
+    $batch = From-B64 $BatchB64
     if (-not $openLbl) { $openLbl = 'Open folder' }
     if (-not $clipLbl) { $clipLbl = 'Copy to clipboard' }
 
@@ -147,8 +153,8 @@ try {
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
     $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
 
-    $openUri = 'droplink:open?folder=' + (To-UrlB64 $folder) + '&file=' + (To-UrlB64 $selectName)
-    $clipUri = 'droplink:clip?text=' + (To-UrlB64 $clip) + '&folder=' + (To-UrlB64 $folder)
+    $openUri = 'droplink:open?batch=' + (To-UrlB64 $batch) + '&folder=' + (To-UrlB64 $folder) + '&file=' + (To-UrlB64 $selectName)
+    $clipUri = 'droplink:clip?batch=' + (To-UrlB64 $batch) + '&text=' + (To-UrlB64 $clip) + '&folder=' + (To-UrlB64 $folder)
 
     $doc = [Windows.Data.Xml.Dom.XmlDocument]::new()
     # URIs contain '&' which must not be hand-spliced into XML. Build a plain

@@ -1,68 +1,170 @@
-<Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink" Width="800" SizeToContent="Height" MaxHeight="780" MinWidth="700" MinHeight="360" ShowInTaskbar="True" WindowStartupLocation="CenterScreen" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
+<Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:DropLink"
+        Title="DropLink" Width="440" Height="580" MinWidth="380" MinHeight="480"
+        Background="{StaticResource PageBackground}" FontFamily="{StaticResource AppFont}"
+        ShowInTaskbar="True" WindowStartupLocation="CenterScreen" UseLayoutRounding="True" SnapsToDevicePixels="True">
  <Window.Resources>
-  <!-- Breathing status dot. Begun and stopped from SetStatus so it only moves
-       while the app is actually working. -->
-  <Storyboard x:Key="PulseDot">
-   <DoubleAnimation Storyboard.TargetName="StatusDot" Storyboard.TargetProperty="Opacity" From="1" To="0.3" Duration="0:0:0.65" AutoReverse="True" RepeatBehavior="Forever"/>
+  <local:KindIconConverter x:Key="KindIcon"/>
+  <!-- The AirDrop mark, drawn rather than shipped as a bitmap so it stays sharp
+       at every DPI. Same geometry as the icon design file. -->
+  <Geometry x:Key="AirMarkOuter">M41,120 A58,58 0 1 1 119,120</Geometry>
+  <Geometry x:Key="AirMarkMiddle">M53,105 A40,40 0 1 1 107,105</Geometry>
+  <Geometry x:Key="AirMarkInner">M65,91 A22,22 0 1 1 95,91</Geometry>
+  <Geometry x:Key="GearGlyph">M4,7 H20 M4,12 H20 M4,17 H20</Geometry>
+
+  <Storyboard x:Key="Breathe">
+   <DoubleAnimation Storyboard.TargetName="MarkGroup" Storyboard.TargetProperty="Opacity" From="1" To="0.45" Duration="0:0:1.1" AutoReverse="True" RepeatBehavior="Forever"/>
   </Storyboard>
- </Window.Resources>
- <Grid Margin="40,28,40,24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <StackPanel><TextBlock Text="DropLink" FontSize="26" FontWeight="Medium" Foreground="#17233C"/><TextBlock Text="把 iPhone 的照片和文件隔空投送到这台电脑" Foreground="#66758D" Margin="0,5,0,0"/>
-   <!-- The state line. It is outside the card on purpose: the card's content
-        changes with the setup step, but "am I receiving right now" has to be
-        readable at any moment, including from the taskbar after minimizing. -->
-   <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-    <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#B6C0D0" VerticalAlignment="Center"/>
-    <TextBlock x:Name="StatusText" Text="正在启动…" FontSize="13" FontWeight="Medium" Foreground="#52627C" Margin="8,0,0,0" VerticalAlignment="Center"/>
-    <TextBlock x:Name="StatusHint" Text="" FontSize="12" Foreground="#93A0B4" Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="520"/>
-   </StackPanel>
-  </StackPanel>
+  <Storyboard x:Key="Spin">
+   <DoubleAnimation Storyboard.TargetName="SpinAngle" Storyboard.TargetProperty="Angle" From="0" To="360" Duration="0:0:0.9" RepeatBehavior="Forever"/>
+  </Storyboard>
+  <Storyboard x:Key="PulseDot">
+   <DoubleAnimation Storyboard.TargetName="ReadyDot" Storyboard.TargetProperty="Opacity" From="1" To="0.3" Duration="0:0:0.7" AutoReverse="True" RepeatBehavior="Forever"/>
+  </Storyboard>
 
-  <!-- One card, one instruction. Nothing here scrolls away: the window is
-       sized so the title, the action and the diagnostics are always visible. -->
-  <Border Grid.Row="1" CornerRadius="18" Background="White" Padding="30,24" Margin="0,20,0,0" BorderBrush="#E4E9F2" BorderThickness="1" VerticalAlignment="Top">
-   <StackPanel>
-    <!-- Step indicator -->
-    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-     <Border x:Name="Step1Box" CornerRadius="16" Padding="12,5" Background="#EAF0FF"><TextBlock x:Name="Step1Text" Text="1  换驱动" Foreground="#2C6BED" FontWeight="Medium"/></Border>
-     <TextBlock Text="→" Foreground="#AEB9CC" Margin="10,0,10,0" VerticalAlignment="Center"/>
-     <Border x:Name="Step2Box" CornerRadius="16" Padding="12,5" Background="#F0F2F6"><TextBlock x:Name="Step2Text" Text="2  开启接收" Foreground="#95A1B5" FontWeight="Medium"/></Border>
-     <TextBlock Text="→" Foreground="#AEB9CC" Margin="10,0,10,0" VerticalAlignment="Center"/>
-     <Border x:Name="Step3Box" CornerRadius="16" Padding="12,5" Background="#F0F2F6"><TextBlock x:Name="Step3Text" Text="3  收文件" Foreground="#95A1B5" FontWeight="Medium"/></Border>
-    </StackPanel>
-
-    <TextBlock x:Name="GuideStepLabel" Text="正在检查…" FontSize="13" Foreground="#2C6BED" FontWeight="Medium" Margin="0,0,0,6"/>
+  <!-- One row per received batch. The whole row is the click target: open the
+       file, or the folder for a batch. -->
+  <DataTemplate x:Key="HistoryRow">
+   <Border x:Name="row" CornerRadius="10" Background="Transparent" Padding="8,7" Margin="0,1" Cursor="Hand"
+           MouseLeftButtonUp="HistoryRow_Click" ToolTip="{Binding Target}">
     <Grid>
-     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-     <!-- Turns only while the chain is being brought up; collapsed otherwise so
-          it never implies work that is not happening. -->
-     <Grid x:Name="Spinner" Grid.Column="0" Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Center" Visibility="Collapsed">
-      <Ellipse Stroke="#DCE4F3" StrokeThickness="2.5"/>
-      <Ellipse Stroke="#2C6BED" StrokeThickness="2.5" StrokeDashArray="6 17" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
-       <Ellipse.RenderTransform><RotateTransform x:Name="SpinnerAngle"/></Ellipse.RenderTransform>
-      </Ellipse>
-     </Grid>
-     <TextBlock x:Name="GuideTitle" Grid.Column="1" Text="正在检查设备与驱动…" FontSize="22" FontWeight="Medium" Foreground="#17233C" TextWrapping="Wrap"/>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <Border Grid.Column="0" Width="32" Height="32" CornerRadius="8" Background="{StaticResource SurfaceMuted}">
+      <Path Data="{Binding Kind, Converter={StaticResource KindIcon}}" Stroke="{StaticResource TextSecondary}"
+            StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+            Width="18" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+     </Border>
+     <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+      <TextBlock Text="{Binding Title}" Style="{StaticResource RowTitle}" TextTrimming="CharacterEllipsis"/>
+      <TextBlock Text="{Binding Subtitle}" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <TextBlock Grid.Column="2" Text="›" FontSize="15" Foreground="{StaticResource TextTertiary}" VerticalAlignment="Center" Margin="0,0,4,0"/>
     </Grid>
-    <TextBlock x:Name="GuideDetail" Text="" FontSize="14" Foreground="#52627C" TextWrapping="Wrap" Margin="0,8,0,18" LineHeight="21"/>
+   </Border>
+   <DataTemplate.Triggers>
+    <Trigger SourceName="row" Property="IsMouseOver" Value="True">
+     <Setter TargetName="row" Property="Background" Value="{StaticResource SurfaceMuted}"/>
+    </Trigger>
+   </DataTemplate.Triggers>
+  </DataTemplate>
+ </Window.Resources>
 
-    <Button x:Name="GuideAction" Content="检查接收条件" HorizontalAlignment="Left" Padding="26,11" FontSize="15" FontWeight="Medium" Foreground="White" Background="#2C6BED" BorderBrush="#2C6BED" Focusable="False" Click="GuideAction_Click"/>
+ <Border Background="{StaticResource PageBackground}">
+  <Grid>
+   <Grid.RowDefinitions>
+    <RowDefinition Height="Auto"/>
+    <RowDefinition Height="*"/>
+    <RowDefinition Height="Auto"/>
+    <RowDefinition Height="Auto"/>
+   </Grid.RowDefinitions>
 
-    <!-- Live transfer line: only occupies space while something is arriving. -->
-    <Border x:Name="ProgressPanel" CornerRadius="10" Background="#EEF3FF" Padding="14,10" Margin="0,14,0,0" Visibility="Collapsed">
-     <TextBlock x:Name="ProgressText" FontSize="13" Foreground="#2C6BED" TextWrapping="Wrap"/>
+   <!-- ── A. brand ─────────────────────────────────────────────────────── -->
+   <Grid Grid.Row="0" Margin="20,16,14,4">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <Border Grid.Column="0" Width="26" Height="26" CornerRadius="7" Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1">
+     <Viewbox Width="16" Height="14">
+      <Canvas Width="160" Height="140">
+       <Path Data="{StaticResource AirMarkOuter}" Stroke="{StaticResource Brand}" StrokeThickness="9" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       <Path Data="{StaticResource AirMarkInner}" Stroke="{StaticResource Brand}" StrokeThickness="9" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       <Ellipse Canvas.Left="73" Canvas.Top="69" Width="14" Height="14" Fill="{StaticResource Brand}"/>
+      </Canvas>
+     </Viewbox>
     </Border>
+    <TextBlock Grid.Column="1" Text="DropLink" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="9,0,0,0"/>
+    <Button Grid.Column="2" x:Name="SettingsButton" Style="{StaticResource IconButton}" Click="Settings_Click" ToolTip="设置">
+     <Canvas Width="18" Height="18">
+      <Path Data="{StaticResource GearGlyph}" Stroke="{StaticResource TextSecondary}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+      <Ellipse Canvas.Left="4.5" Canvas.Top="4.5" Width="4" Height="4" Fill="{StaticResource TextSecondary}"/>
+      <Ellipse Canvas.Left="12.5" Canvas.Top="9.5" Width="4" Height="4" Fill="{StaticResource TextSecondary}"/>
+      <Ellipse Canvas.Left="7.5" Canvas.Top="14.5" Width="4" Height="4" Fill="{StaticResource TextSecondary}"/>
+     </Canvas>
+    </Button>
+   </Grid>
 
-    <TextBox x:Name="ReceiveStatus" Text="" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="#F7F9FC" Foreground="#7C889C" FontSize="12" Padding="10" Margin="0,14,0,0" Height="150" VerticalScrollBarVisibility="Auto" Visibility="Collapsed"/>
+   <!-- ── B. status: exactly one of these is visible ───────────────────── -->
+   <Grid Grid.Row="1" Margin="28,4,28,10">
 
-    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-     <Button x:Name="SettingsButton" Content="设置" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#52627C" Cursor="Hand" Focusable="False" Click="Settings_Click"/>
-     <TextBlock Text="·" Foreground="#C3CBD9" Margin="10,0" VerticalAlignment="Center"/>
-     <Button x:Name="DetailsToggle" Content="详细信息" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#8B97AC" Cursor="Hand" Focusable="False" Click="ToggleDetails_Click"/>
-     <TextBlock Text="·" Foreground="#C3CBD9" Margin="10,0" VerticalAlignment="Center"/>
-     <Button Content="回退驱动" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#B23A48" Cursor="Hand" Focusable="False" Click="Rollback_Click"/>
+    <!-- Waiting / preparing / done -->
+    <StackPanel x:Name="IdlePanel" VerticalAlignment="Center">
+     <Grid Height="112" HorizontalAlignment="Center">
+      <Viewbox x:Name="MarkGroup" Width="112" Height="98" VerticalAlignment="Center">
+       <Canvas Width="160" Height="140">
+        <Path Data="{StaticResource AirMarkOuter}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+        <Path Data="{StaticResource AirMarkMiddle}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+        <Path Data="{StaticResource AirMarkInner}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+        <Ellipse Canvas.Left="74.5" Canvas.Top="70.5" Width="11" Height="11" Fill="{StaticResource Brand}"/>
+       </Canvas>
+      </Viewbox>
+      <!-- Busy ring, only while the radio is actually being brought up. -->
+      <Grid x:Name="Spinner" Width="96" Height="96" Visibility="Collapsed">
+       <Ellipse Stroke="{StaticResource Divider}" StrokeThickness="2.5"/>
+       <Ellipse Stroke="{StaticResource Brand}" StrokeThickness="2.5" StrokeDashArray="4 14" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
+        <Ellipse.RenderTransform><RotateTransform x:Name="SpinAngle"/></Ellipse.RenderTransform>
+       </Ellipse>
+      </Grid>
+     </Grid>
+     <TextBlock x:Name="IdleTitle" Text="等待接收" Style="{StaticResource StatusTitle}" Margin="0,14,0,0"/>
+     <TextBlock x:Name="IdleLine" Text="在 iPhone 的隔空投送中选择" Style="{StaticResource BodyText}"
+                HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+     <TextBlock x:Name="IdleDevice" Text="" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"
+                HorizontalAlignment="Center" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
+     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+      <Ellipse x:Name="ReadyDot" Width="6" Height="6" Fill="{StaticResource Success}" VerticalAlignment="Center"/>
+      <TextBlock x:Name="ReadyLine" Text="接收服务已就绪" Style="{StaticResource Caption}" Margin="7,0,0,0" VerticalAlignment="Center"/>
+     </StackPanel>
     </StackPanel>
+
+    <!-- Receiving / saving -->
+    <StackPanel x:Name="TransferPanel" VerticalAlignment="Center" Visibility="Collapsed">
+     <TextBlock x:Name="TransferHeadline" Text="正在接收" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"/>
+     <TextBlock x:Name="TransferFrom" Text="" Style="{StaticResource BodyText}" Margin="0,3,0,0"/>
+     <TextBlock x:Name="TransferPercent" Text="0%" FontSize="34" FontWeight="Medium" Foreground="{StaticResource TextPrimary}" Margin="0,10,0,0"/>
+     <ProgressBar x:Name="TransferBar" Style="{StaticResource TransferBar}" Margin="0,6,0,0"/>
+     <Grid Margin="0,8,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock x:Name="TransferReceived" Grid.Column="0" Style="{StaticResource Caption}"/>
+      <TextBlock x:Name="TransferRemaining" Grid.Column="1" Style="{StaticResource Caption}"/>
+     </Grid>
+     <TextBlock x:Name="TransferNote" Text="" Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+    </StackPanel>
+
+    <!-- Manual confirmation, in-window: a modal box would block the receiver
+         and steal focus from whatever the user was doing. -->
+    <StackPanel x:Name="ConfirmPanel" VerticalAlignment="Center" Visibility="Collapsed">
+     <TextBlock Text="收到发送请求" Style="{StaticResource StatusTitle}"/>
+     <TextBlock x:Name="ConfirmFrom" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+     <TextBlock x:Name="ConfirmFiles" Text="" Style="{StaticResource Caption}" HorizontalAlignment="Center" TextAlignment="Center"
+                TextTrimming="CharacterEllipsis" MaxWidth="320" Margin="0,4,0,0"/>
+     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+      <Button x:Name="AcceptButton" Content="接收" Style="{StaticResource PrimaryButton}" Click="Accept_Click"/>
+      <Button x:Name="DeclineButton" Content="拒绝" Style="{StaticResource GhostButton}" Margin="10,0,0,0" Click="Decline_Click"/>
+     </StackPanel>
+    </StackPanel>
+
+    <!-- Setup / paused / failure: one sentence, one action. -->
+    <StackPanel x:Name="ActionPanel" VerticalAlignment="Center" Visibility="Collapsed">
+     <TextBlock x:Name="ActionTitle" Text="暂时无法接收" Style="{StaticResource StatusTitle}" TextWrapping="Wrap"/>
+     <TextBlock x:Name="ActionDetail" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+     <Button x:Name="ActionButton" Content="重试" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Margin="0,18,0,0" Click="ActionButton_Click"/>
+     <Button x:Name="ActionSecondary" Content="查看原因" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0,10,0,0"
+             Visibility="Collapsed" Click="ActionSecondary_Click"/>
+    </StackPanel>
+   </Grid>
+
+   <!-- ── C. recent ────────────────────────────────────────────────────── -->
+   <StackPanel Grid.Row="2" Margin="20,0,20,0">
+    <Border Style="{StaticResource Hairline}" Margin="0,0,0,10"/>
+    <Grid Margin="8,0,8,2">
+     <TextBlock Text="最近接收" Style="{StaticResource SectionHeader}"/>
+     <Button x:Name="OpenFolderButton" Content="打开文件夹" Style="{StaticResource LinkButton}" HorizontalAlignment="Right" Click="OpenFolder_Click"/>
+    </Grid>
+    <ItemsControl x:Name="RecentList" ItemTemplate="{StaticResource HistoryRow}" Margin="0,2,0,6" Focusable="False"/>
+    <TextBlock x:Name="RecentEmpty" Text="收到的文件会显示在这里" Style="{StaticResource Caption}" Margin="8,6,0,10"/>
    </StackPanel>
-  </Border>
- </Grid>
+
+   <!-- ── footer ───────────────────────────────────────────────────────── -->
+   <TextBlock x:Name="FooterText" Grid.Row="3" Text="DropLink · 原生隔空投送接收工具" Style="{StaticResource Caption}"
+              HorizontalAlignment="Center" Margin="0,2,0,12"/>
+  </Grid>
+ </Border>
 </Window>

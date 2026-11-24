@@ -73,6 +73,13 @@ internal sealed class EngineClient : IAsyncDisposable
     /// </summary>
     public Task SetNameAsync(string name) => SendAsync(new { @do = "set", name });
 
+    /// <summary>
+    /// Stops accepting new requests without tearing the radio down. Rebuilding
+    /// the chain costs 40-60 s, so "暂停接收" that stopped the session would make
+    /// resuming feel broken; the engine simply declines what arrives.
+    /// </summary>
+    public Task SetPausedAsync(bool paused) => SendAsync(new { @do = "pause", on = paused });
+
     private async Task SendAsync(object command)
     {
         await writeLock.WaitAsync().ConfigureAwait(false);

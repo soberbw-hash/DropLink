@@ -85,6 +85,10 @@ class Settings:
         self.flags = args.flags
         self.max_receive_percent = args.max_receive_percent
         self.auto_receive = bool(getattr(args, 'auto_receive', False))
+        # Paused means "decline what arrives" without tearing the radio down.
+        # Rebuilding the chain costs 40-60 s, so stopping the session to pause
+        # would make resuming feel broken.
+        self.paused = False
         self.redact = False
         self.interface_index = 0
 
@@ -236,7 +240,7 @@ def toast_text(names, show_format=True, live=None):
     return title, body
 
 
-def notify_received(folder, names, live=None):
+def notify_received(folder, names, live=None, batch=None):
     """Best-effort Windows toast on completion; never blocks or breaks reception."""
     def _run():
         try:
@@ -279,7 +283,11 @@ def notify_received(folder, names, live=None):
                     '-OpenLabelB64', b64('打开接收文件夹'),
                     '-ClipLabelB64', b64('复制到剪贴板'),
                     '-ImageB64', b64(preview),
-                    '-SelectB64', b64(first_name)]
+                    '-SelectB64', b64(first_name),
+                    # The button payload is a history id, not a path: a protocol
+                    # URI is world-invokable, so it must not be able to aim
+                    # Explorer at any folder it likes.
+                    '-BatchB64', b64(batch or '')]
             # CREATE_NO_WINDOW: the engine is started without a console, so a
             # console child would otherwise get a fresh, *visible* one - a black
             # PowerShell box popping up right after a file arrives.
@@ -359,23 +367,30 @@ class Incoming(receiver.Watcher):
                 self._waiting[key] = {'made': threading.Event(), 'accept': False}
         sizes = [file['size'] for file in files]
         total = sum(sizes) if sizes and None not in sizes else None
-        # In auto-receive mode we deliberately do NOT emit 'asked': the WPF
-        # host shows a confirmation MessageBox for every 'asked' event and its
-        # binary cannot be rebuilt here (no .NET SDK). Staying silent means no
-        # prompt; the transfer is accepted inline and only the completion is
-        # reported through 'stored' plus an OS toast.
+        # Every transfer is announced, in both modes. It used to be silent in
+        # auto-receive mode, and the host only created a row for an 'asked' that
+        # was waiting for an answer - so an auto-accepted transfer had no row at
+        # all and its progress events were dropped on the floor.
+        self.events.say('transfer_created', id=key, sender=sender_name, model=model,
+                        files=files, links=links, total=total,
+                        files_count=len(files), requires_confirmation=bool(waits),
+                        mode='confirm' if waits else 'auto')
         if getattr(self.settings, 'auto_receive', False):
             logging.info('auto-accepted transfer from %s: %s', sender_name,
                          ', '.join(f['name'] for f in files))
-        else:
-            self.events.say('asked', id=key, sender=sender_name, model=model, files=files,
-                            links=links, total=total, waits=waits)
         return Accepted(key, total)
 
     def asked(self, ask, address, left):
         kinds = ask.get('TransferType') or {}
         links = sum(1 for item in ask.get('Items') or [] if transfer.is_web_link(item)) \
             if 'links' in kinds else 0
+        if getattr(self.settings, 'paused', False):
+            # Paused is a real refusal, not a silent drop: the sender sees the
+            # transfer declined and the host gets an honest 'answered' event.
+            accepted = self._open(ask.get('SenderComputerName'), ask.get('SenderModelName'),
+                                  announced_files(ask), links, False)
+            self.events.say('answered', id=accepted.key, how='declined')
+            return None
         waits = self.settings.ask and not getattr(self.settings, 'auto_receive', False)
         accepted = self._open(ask.get('SenderComputerName'), ask.get('SenderModelName'),
                               announced_files(ask), links, waits)
@@ -449,7 +464,7 @@ class Incoming(receiver.Watcher):
         if getattr(self.settings, 'auto_receive', False):
             extra = make_still_copies(folder, names)
             shown = [str(n) for n in names] + extra
-            notify_received(folder, shown, live)
+            notify_received(folder, shown, live, batch=token.key)
 
     def upload_failed(self, token, reason):
         self.events.say('lost', id=token.key, reason=reason)
@@ -884,6 +899,12 @@ class Engine:
             self.sending.cancel(str(command.get('id')))
         elif do == 'answer':
             self.incoming.answer(str(command.get('id')), command.get('accept') is True)
+        elif do == 'pause':
+            # Declining new requests only. A transfer that was already accepted
+            # runs to the end - cutting it off would lose the user's files.
+            self.settings.paused = command.get('on') is True
+            logging.info('receiving %s', 'paused' if self.settings.paused else 'resumed')
+            self.events.say('paused', on=self.settings.paused)
         elif do == 'set':
             self.set(command)
         else:
@@ -949,9 +970,12 @@ def parse_args(argv):
         except argparse.ArgumentTypeError:
             pass
     if 'auto_receive' in cfg:
+        # settings.json is the single source of truth. The settings window writes
+        # it, so a stale environment variable must never turn auto-receive back on
+        # after the user switched it off.
         args.auto_receive = bool(cfg['auto_receive'])
-    # Enable from the launcher via env as a fallback for older launchers.
-    if os.environ.get('DROPLINK_AUTO_RECEIVE') == '1':
+    elif os.environ.get('DROPLINK_AUTO_RECEIVE') == '1':
+        # Fallback for older launchers that predate the settings file only.
         args.auto_receive = True
     if args.auto_receive:
         args.ask = False

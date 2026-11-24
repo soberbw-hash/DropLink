@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using MessageBox = System.Windows.MessageBox;
 
 namespace DropLink;
 
@@ -31,6 +32,8 @@ public partial class SettingsWindow : Window
         RegexOptions.Compiled);
 
     private readonly Func<string, Task<bool>>? applyDeviceName;
+    private readonly Func<string, Task<bool>>? applyReceiveFolder;
+    private readonly Action? clearHistory;
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string hostName = System.Net.Dns.GetHostName().Split('.')[0];
     private JsonObject settings = new();
@@ -39,10 +42,13 @@ public partial class SettingsWindow : Window
     private bool loading = true;
     private bool applyingAutostart;
 
-    internal SettingsWindow(Func<string, Task<bool>>? applyDeviceName)
+    internal SettingsWindow(Func<string, Task<bool>>? applyDeviceName,
+        Func<string, Task<bool>>? applyReceiveFolder = null, Action? clearHistory = null)
     {
         InitializeComponent();
         this.applyDeviceName = applyDeviceName;
+        this.applyReceiveFolder = applyReceiveFolder;
+        this.clearHistory = clearHistory;
         Loaded += async (_, _) => await LoadAsync();
     }
 
@@ -79,6 +85,9 @@ public partial class SettingsWindow : Window
             AutoReceiveSwitch.IsChecked = Bool("auto_receive", true);
             LivePhotoSwitch.IsChecked = Bool("live_photo_still_copy", true);
             FormatSwitch.IsChecked = Bool("show_format_in_notification", true);
+            FolderText.Text = SettingsFile.ReceiveFolder();
+            VersionText.Text = Version();
+            HistoryHint.Text = "首页显示最近三次。清空列表不会删除已经收到的文件。";
         }
         catch (Exception error)
         {
@@ -117,21 +126,9 @@ public partial class SettingsWindow : Window
     private bool Bool(string key, bool fallback) =>
         settings[key] is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : fallback;
 
-    private JsonObject ReadSettings()
-    {
-        if (!File.Exists(SettingsPath)) return new JsonObject();
-        var text = File.ReadAllText(SettingsPath, Encoding.UTF8);
-        return JsonNode.Parse(text) as JsonObject ?? new JsonObject();
-    }
+    private JsonObject ReadSettings() => SettingsFile.Read();
 
-    private void WriteSettings()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-        var json = settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        // No BOM: the engine reads this file with utf-8 and a BOM would end up
-        // inside the first key's name.
-        File.WriteAllText(SettingsPath, json, new UTF8Encoding(false));
-    }
+    private void WriteSettings() => SettingsFile.Save(settings);
 
     /// <summary>
     /// The three receive switches. They are startup options - the engine reads
@@ -250,6 +247,112 @@ public partial class SettingsWindow : Window
     }
 
     private void Done_Click(object sender, RoutedEventArgs e) => Close();
+
+    private static string Version()
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var info = FileVersionInfo.GetVersionInfo(path);
+                var shown = info.ProductVersion ?? info.FileVersion;
+                if (!string.IsNullOrWhiteSpace(shown)) return "版本 " + shown.Trim();
+            }
+        }
+        catch (Exception) { /* fall through to the assembly version */ }
+        return "版本 " + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0");
+    }
+
+    /// <summary>
+    /// The folder picker writes the choice, then asks the receiver to move to
+    /// it. Files already received stay where they are - moving a user's files
+    /// because a setting changed would be the app overstepping.
+    /// </summary>
+    private async void ChangeFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "选择接收文件的保存位置",
+            InitialDirectory = SettingsFile.ReceiveFolder(),
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        var chosen = dialog.FolderName;
+        try
+        {
+            settings["receive_folder"] = chosen;
+            WriteSettings();
+            FolderText.Text = chosen;
+        }
+        catch (Exception error)
+        {
+            SetNote("保存失败：" + error.Message, true);
+            return;
+        }
+        if (applyReceiveFolder is null) { SetNote("已保存，下一次开始接收时使用这个位置。"); return; }
+        try
+        {
+            var live = await applyReceiveFolder(chosen);
+            SetNote(live
+                ? "已改到：" + chosen
+                : "已保存。下一次开始接收时使用这个位置（正在接收的这批会存到原位置）。");
+        }
+        catch (Exception error)
+        {
+            SetNote("已保存。重启接收后生效（" + error.Message + "）。", true);
+        }
+    }
+
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "清空接收历史列表？\n\n已经收到的文件不会被删除。", "清空接收历史",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+        try
+        {
+            clearHistory?.Invoke();
+            SetNote("列表已清空。文件还在原来的文件夹里。");
+        }
+        catch (Exception error) { SetNote("清空失败：" + error.Message, true); }
+    }
+
+    // Driver rollback lives here now instead of on the main window: it is a
+    // maintenance action, not something the daily screen should offer.
+    private async void Rollback_Click(object sender, RoutedEventArgs e)
+    {
+        var script = Environment.GetEnvironmentVariable("DROPLINK_ROLLBACK_CMD") ?? "";
+        if (string.IsNullOrWhiteSpace(script) || !File.Exists(script))
+        {
+            ShowResult("找不到回退脚本：" + script);
+            return;
+        }
+        if (MessageBox.Show(this, "把网卡恢复成原厂驱动？\n\n恢复后这张网卡可以继续当 Wi-Fi 用，\n但 DropLink 会停止接收，直到重新配置。\n\n继续？",
+                "回退驱动", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+        ShowResult("正在回退，最多 1 分钟…");
+        try
+        {
+            var info = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(script)!
+            };
+            foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Force" })
+                info.ArgumentList.Add(arg);
+            using var process = Process.Start(info) ?? throw new InvalidOperationException("无法启动脚本。");
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            await process.WaitForExitAsync();
+            ShowResult(process.ExitCode == 0
+                ? "已恢复成原厂驱动。"
+                : "回退没有成功（退出码 " + process.ExitCode + "）：" + (output + error).Trim());
+        }
+        catch (Exception ex) { ShowResult("回退失败：" + ex.Message); }
+    }
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {

@@ -153,6 +153,14 @@ internal sealed class ReceiverSession : IAsyncDisposable
         return current.SetNameAsync(name);
     }
 
+    /// <summary>Pause/resume accepting. A missing engine is not an error here:
+    /// the UI keeps the flag and applies it when the next session starts.</summary>
+    internal Task SetPausedAsync(bool paused)
+    {
+        var current = engine;
+        return current is null ? Task.CompletedTask : current.SetPausedAsync(paused);
+    }
+
     private void OnChainFailed(string message) => Failed?.Invoke(message);
 
     private void OnChainStage(string message) => Stage?.Invoke(message);
