@@ -9,16 +9,20 @@ internal enum GuideStep
 {
     EnvironmentBlocked, // backend files missing / not launched via start script
     NeedRestart,        // authorization / recovery flags not set
-    SwitchDriver,       // step 1: no supported card bound to WinUSB yet
+    SwitchDriver,       // no supported card bound to WinUSB yet
     Rescan,             // WinUSB present but not yet pinned to a libusb device
-    StartReceiving,     // step 2: all preconditions met
-    Starting,           // step 2 in progress: the chain is being brought up
-    Receiving           // step 3: session running, waiting for an iPhone
+    StartReceiving,     // all preconditions met
+    Starting,           // the chain is being brought up
+    Receiving           // session running, waiting for an iPhone
 }
 
+// There used to be a StepLabel here ("第 2 步 / 共 3 步"). Nothing ever read it,
+// and it was wrong: the real setup is four steps in SetupWindow. A field that
+// nothing renders but that claims a step count is a trap - the next person to
+// wire it up would have put "共 3 步" on a four-step flow. The step position is
+// owned by SetupWindow, which counts its own pages.
 internal sealed record SetupGuideResult(
     GuideStep Step,
-    string StepLabel,
     string Title,
     string Detail,
     string PrimaryAction,
@@ -45,21 +49,21 @@ internal static class SetupGuide
         var files = input.RequiredFiles;
         if (files.Count < 4 || files.Any(string.IsNullOrWhiteSpace) || files.Any(f => !File.Exists(f)))
             return new SetupGuideResult(
-                GuideStep.EnvironmentBlocked, "准备阶段",
+                GuideStep.EnvironmentBlocked,
                 "软件文件不完整",
                 "backend 文件夹没有放在软件目录里，补全后再打开一次。",
                 "重新检查", true);
 
         if (!input.Authorized || !input.RecoveryVerified)
             return new SetupGuideResult(
-                GuideStep.NeedRestart, "准备阶段",
+                GuideStep.NeedRestart,
                 "需要重新打开一次",
                 "点右上角 × 退出 DropLink，再重新打开。",
                 "重新检查", true);
 
         if (input.SessionRunning)
             return new SetupGuideResult(
-                GuideStep.Receiving, "第 3 步 / 共 3 步",
+                GuideStep.Receiving,
                 "正在接收",
                 "在 iPhone 上用隔空投送分享文件，选这台电脑。",
                 "", false);
@@ -69,27 +73,27 @@ internal static class SetupGuide
         // working, and pressing it started a second chain on top of the first.
         if (input.Starting)
             return new SetupGuideResult(
-                GuideStep.Starting, "第 2 步 / 共 3 步",
+                GuideStep.Starting,
                 "正在初始化网卡",
                 "通常 1 分钟，偶尔要几分钟。完成后会自动开始接收，这期间不用点任何东西。",
                 "", false);
 
         if (input.ReadyWinUsbCards == 0)
             return new SetupGuideResult(
-                GuideStep.SwitchDriver, "第 1 步 / 共 3 步",
+                GuideStep.SwitchDriver,
                 "完成一次配置，即可开始隔空投送",
                 "需要把这张无线网卡切换成 WinUSB。一次即可，随时可以回退。",
                 "开始配置", true);
 
         if (!input.HasLibusbTarget)
             return new SetupGuideResult(
-                GuideStep.Rescan, "第 1 步 / 共 3 步",
+                GuideStep.Rescan,
                 "还差最后一步",
                 "把网卡拔下再插一次，让它重新被识别。",
                 "重新检查", true);
 
         return new SetupGuideResult(
-            GuideStep.StartReceiving, "第 2 步 / 共 3 步",
+            GuideStep.StartReceiving,
             "正在准备接收",
             "条件已满足，正在自动开始，这期间不用点任何东西。",
             "开启接收", true);

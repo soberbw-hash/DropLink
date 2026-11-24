@@ -978,7 +978,7 @@ public partial class MainWindow : Window
         supportedCards = 1;
         readyCards = 1;
         currentStep = GuideStep.Receiving;
-        guide = new SetupGuideResult(GuideStep.Receiving, "", "等待接收", "", "", false);
+        guide = new SetupGuideResult(GuideStep.Receiving, "等待接收", "", "", false);
         transfers.Items.Clear();
         paused = false;
         failure = null;
@@ -995,7 +995,7 @@ public partial class MainWindow : Window
                 currentStep = GuideStep.SwitchDriver;
                 // Mirrors SetupGuide's first-run copy. It is sample text for a
                 // layout render; the live window always gets it from the guide.
-                guide = new SetupGuideResult(GuideStep.SwitchDriver, "",
+                guide = new SetupGuideResult(GuideStep.SwitchDriver,
                     "完成一次配置，即可开始隔空投送",
                     "需要把这张无线网卡切换成 WinUSB。一次即可，随时可以回退。",
                     "开始配置", true);
