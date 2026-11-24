@@ -1,0 +1,136 @@
+--- a/airdrop/engine.py
++++ b/airdrop/engine.py
+@@ -14,6 +14,8 @@
+ import errno
+ import http.client
+ import itertools
++import ipaddress
++import os
+ import json
+ import logging
+ import secrets
+@@ -213,12 +215,15 @@
+ class Receiving:
+     """The receiver and its announcement, for as long as the link is up."""
+ 
+-    def __init__(self, events, settings, watcher, context, loopback):
++    def __init__(self, events, settings, watcher, context, loopback, proxy=False, keys=None, proxy_port=15353):
+         self.events = events
+         self.settings = settings
+         self.watcher = watcher
+         self.context = context
+         self.loopback = loopback
++        self.proxy = proxy
++        self.keys = keys
++        self.proxy_port = proxy_port
+         self.server = None
+         self.thread = None
+         self.announcer = None
+@@ -236,7 +241,7 @@
+             return True
+         self.settings.interface_index = index
+         try:
+-            server = receiver.Receiver(self.settings.port, self.settings, self.watcher)
++            server = receiver.Receiver(self.settings.port, self.settings, self.watcher, proxy=self.proxy)
+         except OSError as error:
+             held = error.errno == errno.EADDRINUSE
+             self._say(False, 'port_held' if held else str(error))
+@@ -248,13 +253,14 @@
+         self.thread = threading.Thread(target=server.serve_forever, name='receiver',
+                                        daemon=True)
+         self.thread.start()
+-        if not self.loopback:
+-            service_id = secrets.token_hex(6)
++        if self.proxy or not self.loopback:
++            service_id = (receiver.stable_service_id(address, self.keys)
++                          if self.proxy else secrets.token_hex(6))
+             try:
+-                self.announcer = mdns.Announcer(
+-                    mdns.Service(receiver.SERVICE_TYPE, service_id, f'{service_id}.local',
+-                                 address, self.settings.port, f'flags={self.settings.flags}'),
+-                    index)
++                service = mdns.Service(receiver.SERVICE_TYPE, service_id, f'{service_id}.local',
++                                       address, self.settings.port, f'flags={self.settings.flags}')
++                self.announcer = (receiver.ProxyAnnouncer(service, self.proxy_port)
++                                  if self.proxy else mdns.Announcer(service, index))
+                 self.announcer.start()
+             except OSError as error:
+                 self.stop()
+@@ -525,10 +531,12 @@
+         self.settings = Settings(args)
+         self.alias = args.iface
+         self.loopback = args.loopback
++        self.proxy_address_file = args.proxy_address_file
+         self.context = receiver.tls_context(args.keys)
+         self.incoming = Incoming(events, self.settings)
+         self.receiving = Receiving(events, self.settings, self.incoming, self.context,
+-                                   args.loopback)
++                                   args.loopback, bool(args.proxy_address_file),
++                                   args.keys, args.mdns_proxy_port)
+         self.looking = Looking(events, sender.client_context(args.keys),
+                                dict(args.peer) if args.loopback else None)
+         self.sending = Sending(events, self.settings, self.looking, self.looking.context)
+@@ -542,6 +550,14 @@
+         self._link_thread.start()
+ 
+     def _found(self):
++        if self.proxy_address_file:
++            try:
++                with open(self.proxy_address_file, encoding='ascii') as handle:
++                    value = handle.read(128).strip()
++                address = ipaddress.IPv6Address(value)
++                return (0, str(address)) if address.is_link_local else None
++            except (OSError, ValueError, UnicodeError):
++                return None
+         if self.loopback:
+             return LOOPBACK[1], LOOPBACK[0]
+         index = netif.interface_index(self.alias)
+@@ -586,7 +602,10 @@
+             except argparse.ArgumentTypeError as error:
+                 refused['folder'] = str(error)
+         if 'ask' in command:
+-            self.settings.ask = bool(command['ask'])
++            if self.proxy_address_file and command['ask'] is not True:
++                refused['ask'] = 'confirmation required in proxy mode'
++            else:
++                self.settings.ask = bool(command['ask'])
+         self.events.say('settings', refused=refused, **self.settings.public())
+ 
+     def handle(self, command):
+@@ -594,6 +613,9 @@
+         do = command.get('do')
+         if do == 'quit':
+             return False
++        if self.proxy_address_file and do in ('look', 'send'):
++            self.events.say('error', reason='sending is unavailable in proxy mode')
++            return True
+         if do == 'look':
+             with self._lock:
+                 self.looking.look(bool(command.get('on')))
+@@ -603,7 +625,7 @@
+         elif do == 'cancel':
+             self.sending.cancel(str(command.get('id')))
+         elif do == 'answer':
+-            self.incoming.answer(str(command.get('id')), bool(command.get('accept')))
++            self.incoming.answer(str(command.get('id')), command.get('accept') is True)
+         elif do == 'set':
+             self.set(command)
+         else:
+@@ -639,8 +661,16 @@
+                         help='for a test without a radio: receive on this computer '
+                              'alone and offer the receivers given with --peer')
+     parser.add_argument('--peer', type=fixed_peer, action='append', default=[])
++    parser.add_argument('--proxy-address-file', default=None,
++                        help='experimental local awdl_netd receiver proxy')
++    parser.add_argument('--mdns-proxy-port', type=int, default=15353)
+     parser.add_argument('--trace', action='store_true')
+-    return parser.parse_args(argv)
++    args = parser.parse_args(argv)
++    if args.proxy_address_file and (args.loopback or not args.ask or args.peer):
++        parser.error('proxy mode requires confirmation and cannot be combined with loopback or peers')
++    if not 1 <= args.mdns_proxy_port <= 65535:
++        parser.error('invalid mDNS proxy port')
++    return args
+ 
+ 
+ def main(argv=None):

@@ -17,7 +17,7 @@
 +        name = str(item)
 +        source = os.path.join(staging, name)
 +        # Flush completed file data before its final name is exposed.
-+        with open(source, 'rb') as complete:
++        with open(source, 'rb+') as complete:
 +            os.fsync(complete.fileno())
 +        group = getattr(item, 'live_photo', None)
 +        if group is not None:
