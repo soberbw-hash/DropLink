@@ -3,7 +3,11 @@
 $ErrorActionPreference = 'Stop'
 try {
     $here = Split-Path -Parent $PSCommandPath
-    $handler = Join-Path $here 'toast-action.ps1'
+    # wscript.exe, not powershell.exe: a protocol activation starts a console
+    # program with a visible window, so registering powershell here made every
+    # toast button click flash a black console. The .vbs host has no console and
+    # starts the worker hidden.
+    $handler = Join-Path $here 'toast-action.vbs'
     $root = 'HKCU:\Software\Classes\droplink'
     if (-not (Test-Path $root)) { New-Item -Path $root -Force | Out-Null }
 
@@ -13,7 +17,7 @@ try {
     $cmdPath = "$root\shell\open\command"
     if (-not (Test-Path $cmdPath)) { New-Item -Path $cmdPath -Force | Out-Null }
     # %1 is the full droplink:... URI passed by Windows on activation.
-    $command = '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "{0}" "%1"' -f $handler
+    $command = '"C:\Windows\System32\wscript.exe" //nologo //B "{0}" "%1"' -f $handler
     New-ItemProperty -Path $cmdPath -Name '(Default)' -Value $command -PropertyType String -Force | Out-Null
     Write-Output "registered droplink protocol -> $handler"
 } catch {

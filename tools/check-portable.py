@@ -43,6 +43,7 @@ REQUIRED = [
     'backend/airdrop/transfer.py',
     'backend/airdrop/notify.ps1',
     'backend/airdrop/toast-action.ps1',
+    'backend/airdrop/toast-action.vbs',
     'backend/airdrop/settings-tool.ps1',
     'backend/airdrop/test-card.ps1',
     'backend/airdrop/benchmark.ps1',

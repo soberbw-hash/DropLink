@@ -263,8 +263,13 @@ def notify_received(folder, names):
                     '-OpenLabelB64', b64('打开接收文件夹'),
                     '-ClipLabelB64', b64('复制到剪贴板'),
                     '-ImageB64', b64(preview)]
+            # CREATE_NO_WINDOW: the engine is started without a console, so a
+            # console child would otherwise get a fresh, *visible* one - a black
+            # PowerShell box popping up right after a file arrives.
+            creation = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
             subprocess.run(args, timeout=20, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, check=False)
+                           stderr=subprocess.DEVNULL, check=False,
+                           creationflags=creation)
         except Exception as error:
             logging.warning('toast notification failed: %s', error)
     threading.Thread(target=_run, name='toast', daemon=True).start()

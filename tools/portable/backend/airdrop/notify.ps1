@@ -53,14 +53,16 @@ function Ensure-Aumid {
 function Ensure-Protocol {
     try {
         $here = Split-Path -Parent $PSCommandPath
-        $handler = Join-Path $here 'toast-action.ps1'
+        # wscript.exe, not powershell.exe: see register-protocol.ps1. A console
+        # program registered here flashes a black window on every button click.
+        $handler = Join-Path $here 'toast-action.vbs'
         $root = 'HKCU:\Software\Classes\droplink'
         if (-not (Test-Path $root)) { New-Item -Path $root -Force | Out-Null }
         New-ItemProperty -Path $root -Name '(Default)' -Value 'URL:DropLink toast action' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $root -Name 'URL Protocol' -Value '' -PropertyType String -Force | Out-Null
         $cmdPath = "$root\shell\open\command"
         if (-not (Test-Path $cmdPath)) { New-Item -Path $cmdPath -Force | Out-Null }
-        $command = '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "{0}" "%1"' -f $handler
+        $command = '"C:\Windows\System32\wscript.exe" //nologo //B "{0}" "%1"' -f $handler
         New-ItemProperty -Path $cmdPath -Name '(Default)' -Value $command -PropertyType String -Force | Out-Null
     } catch { }
 }
