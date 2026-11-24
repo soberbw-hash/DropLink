@@ -50,9 +50,12 @@ class ToastTextTests(unittest.TestCase):
         # A Live Photo arrives as a *.pvt folder plus the still copy the
         # receiver makes, so the extension alone does not explain the result.
         # The folder itself is a container and must not be listed as a format.
+        # The line says what else is there - it must not promise that this
+        # machine can open it, because HEIC/HEVC codecs are not always present.
         title, body = engine.toast_text(['IMG_0001.pvt', 'IMG_0001.HEIC'])
         self.assertEqual(title, '2 个文件 · IMG_0001.pvt')
-        self.assertEqual(body, '电脑可查看：HEIC')
+        self.assertEqual(body, '另有：HEIC')
+        self.assertNotIn('可查看', body)
 
     def test_format_line_can_be_switched_off(self):
         _title, body = engine.toast_text(['IMG_0001.pvt', 'IMG_0001.HEIC'],

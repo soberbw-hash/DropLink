@@ -233,7 +233,11 @@ def toast_text(names, show_format=True, live=None):
                         if os.path.splitext(n)[1].lower() != '.pvt'}
             suffixes = {s for s in suffixes if s}
             if opaque and suffixes:
-                line = '电脑可查看：' + ' '.join(sorted(suffixes))
+                # Not "电脑可查看": a file extension is not proof that this
+                # machine has the codec. HEIC needs the HEIF extension and HEVC
+                # needs a codec pack, neither of which ships with Windows. Say
+                # what else is there, do not promise it will open.
+                line = '另有：' + ' '.join(sorted(suffixes))
                 body = (body + '\n' + line) if body else line
         except Exception:
             pass
