@@ -35,6 +35,7 @@ public partial class App : System.Windows.Application
         // an ordinary .lnk that Explorer, the Start menu and "pin to taskbar"
         // all accept - a hand-built file is rejected by half of them.
         EnsureDesktopShortcut();
+        EnsurePortableShortcut();
 
         // Driver binding needs an administrator token. The manifest already
         // asks for one, but if it was bypassed (shortcut, filtered parent) the
@@ -253,9 +254,15 @@ public partial class App : System.Windows.Application
         return true;
     }
 
-    // Written once, and never overwritten: a shortcut the user renamed or moved
-    // is theirs, and silently recreating it every launch would be its own kind
-    // of rude. Failure is logged and ignored - the receiver still has to work.
+    // Written once, and never overwritten while it still points at this exe: a
+    // shortcut the user renamed or moved is theirs, and silently recreating it
+    // every launch would be its own kind of rude. Failure is logged and
+    // ignored - the receiver still has to work.
+    //
+    // "Still points at this exe" is tracked in data\shortcut.target rather than
+    // read back out of the .lnk. A shortcut left behind by a moved package is a
+    // button that does nothing, and the app that could repair it is exactly the
+    // thing the dead shortcut was supposed to start.
     private static void EnsureDesktopShortcut()
     {
         try
@@ -265,10 +272,46 @@ public partial class App : System.Windows.Application
             var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             if (string.IsNullOrWhiteSpace(desktop)) return;
             var link = Path.Combine(desktop, "DropLink.lnk");
-            if (File.Exists(link)) return;
+            var stamp = Path.Combine(AppPaths.DataDirectory(), "shortcut.target");
+            if (File.Exists(link) && File.Exists(stamp) &&
+                string.Equals(File.ReadAllText(stamp).Trim(), exe, StringComparison.OrdinalIgnoreCase))
+                return;
+            if (!CreateShortcut(link, exe)) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(stamp)!);
+            File.WriteAllText(stamp, exe);
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("desktop shortcut failed: " + error.Message);
+        }
+    }
 
+    // The package root is the only place most people look, so the button they
+    // need belongs there instead of one folder down. Same shell call as the
+    // desktop shortcut on purpose: the shell rejects a hand-built .lnk, which is
+    // how a "start here" file ends up doing nothing when double-clicked.
+    private static void EnsurePortableShortcut()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exe)) return;
+            var link = Path.Combine(AppPaths.PortableRoot(), "启动 DropLink.lnk");
+            if (File.Exists(link)) return;
+            CreateShortcut(link, exe);
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("portable shortcut failed: " + error.Message);
+        }
+    }
+
+    private static bool CreateShortcut(string link, string exe)
+    {
+        try
+        {
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType is null) return;
+            if (shellType is null) return false;
             dynamic shell = Activator.CreateInstance(shellType)!;
             dynamic shortcut = shell.CreateShortcut(link);
             shortcut.TargetPath = exe;
@@ -276,11 +319,13 @@ public partial class App : System.Windows.Application
             shortcut.IconLocation = exe + ",0";
             shortcut.Description = "DropLink - iPhone 隔空投送接收器";
             shortcut.Save();
-            AppLog.Write("desktop shortcut created: " + link);
+            AppLog.Write("shortcut written: " + link);
+            return true;
         }
         catch (Exception error)
         {
-            AppLog.Write("desktop shortcut failed: " + error.Message);
+            AppLog.Write("shortcut failed for " + link + ": " + error.Message);
+            return false;
         }
     }
 

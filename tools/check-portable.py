@@ -33,11 +33,18 @@ UPSTREAM_ENGINE_MODULES = [
 ]
 
 REQUIRED = [
-    'Start-DropLink.vbs',
-    '启动 DropLink.cmd',
-    '_工具/设置 DropLink.cmd',
-    '_工具/测试 DropLink.cmd',
-    '_工具/性能基准.cmd',
+    # The one thing a user is supposed to double-click. Written by the app with
+    # the shell API, so it cannot be produced by the source tree alone: the
+    # source-only check skips it (see SKIP_SOURCE_ONLY below).
+    '启动 DropLink.lnk',
+    # Fallback launchers and the diagnostic tools live out of sight; a root with
+    # three scripts and a tool folder in it is what made the package look like a
+    # build output rather than something a person downloaded.
+    '_backup/工具/启动 DropLink.cmd',
+    '_backup/工具/Start-DropLink.vbs',
+    '_backup/工具/设置 DropLink.cmd',
+    '_backup/工具/测试 DropLink.cmd',
+    '_backup/工具/性能基准.cmd',
     'backend/airdrop/engine.py',
     'backend/airdrop/receiver.py',
     'backend/airdrop/transfer.py',
@@ -51,6 +58,21 @@ REQUIRED = [
     'data/hardware.default.json',
 ] + BINARIES
 
+# Built or machine-specific at assembly time, so their absence in the source
+# tree is not a defect.
+SKIP_SOURCE_ONLY = set(BINARIES) | {'启动 DropLink.lnk'}
+
+
+# What the root is allowed to contain. Anything else is a stray file that made
+# the folder read as a build output - .bak copies, logs, an unpacked folder -
+# and it is reported instead of silently shipped.
+ROOT_ALLOWED = {
+    'app', 'backend', 'data', 'licenses', '_backup',
+    '使用说明.txt', '启动 DropLink.lnk',
+    # publish.ps1 renames the running image instead of overwriting it.
+    'DropLink.exe.old',
+}
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -59,7 +81,7 @@ def main():
                         help='check the repository skeleton; binaries are expected to be built later')
     args = parser.parse_args()
     root = args.portable.resolve()
-    required = [item for item in REQUIRED if not (args.source_only and item in BINARIES)]
+    required = [item for item in REQUIRED if not (args.source_only and item in SKIP_SOURCE_ONLY)]
     if not args.source_only:
         required += UPSTREAM_ENGINE_MODULES
     errors = []
@@ -73,6 +95,10 @@ def main():
             errors.append(f'missing: {relative}')
         elif path.stat().st_size == 0:
             errors.append(f'empty: {relative}')
+    for entry in sorted(root.iterdir()):
+        if entry.name in ROOT_ALLOWED or entry.name.startswith('.'):
+            continue
+        warnings.append(f'stray at the root: {entry.name}')
     for relative in ('data/settings.json', 'data/hardware.json'):
         path = root / relative
         if not path.is_file():

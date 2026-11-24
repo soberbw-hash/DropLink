@@ -15,17 +15,27 @@ namespace DropLink;
 internal static class AppPaths
 {
     /// <summary>
-    /// The portable root: the folder that holds app\ and backend\. Every path
-    /// the app writes (data\settings.json, data\logs, data\received) hangs off
-    /// this, so it has to be derived the same way everywhere.
+    /// The portable root: the folder that holds backend\ next to the exe. Every
+    /// path the app writes (data\settings.json, data\logs, data\received) hangs
+    /// off this, so it has to be derived the same way everywhere.
+    ///
+    /// Found by walking up rather than by "parent of the exe folder": the exe
+    /// ships either in app\ or directly in the root beside backend\, and a
+    /// layout change used to send data\ to the parent of the whole package -
+    /// i.e. onto the Desktop - with nothing to show for it.
     /// </summary>
     public static string PortableRoot()
     {
         var exe = Environment.ProcessPath;
-        var appDir = string.IsNullOrWhiteSpace(exe)
+        var start = new DirectoryInfo(string.IsNullOrWhiteSpace(exe)
             ? AppContext.BaseDirectory
-            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
-        return Directory.GetParent(appDir)?.FullName ?? appDir;
+            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory);
+        for (var d = start; d is not null; d = d.Parent)
+        {
+            if (File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe"))) return d.FullName;
+            if (Directory.Exists(Path.Combine(d.FullName, "prepared-next"))) return d.FullName;
+        }
+        return Directory.GetParent(start.FullName)?.FullName ?? start.FullName;
     }
 
     /// <summary>
@@ -87,7 +97,10 @@ internal static class AppPaths
             // nowhere. Diagnosis needs that file.
             FillDirectory("DROPLINK_LOG_DIR", Path.Combine(work.FullName, "data", "logs"));
             Fill("DROPLINK_HARDWARE_FILE", Path.Combine(work.FullName, "data", "hardware.json"));
-            FillValue("DROPLINK_DEVICE_NAME", "DropLink");
+            // Same name the old launcher put in the AirDrop list (COMPUTERNAME).
+            // data\settings.json still wins when it names a device.
+            FillValue("DROPLINK_DEVICE_NAME", Environment.MachineName);
+            EnsureSettings(Path.Combine(work.FullName, "data"));
 
             // Portable driver kit: point at the .ps1 directly. The app runs it
             // through the PowerShell host, which rejects a .cmd path. The .cmd
@@ -118,6 +131,31 @@ internal static class AppPaths
     {
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))) return;
         if (File.Exists(path)) Environment.SetEnvironmentVariable(name, path);
+    }
+
+    /// <summary>
+    /// data\settings.json has to exist before the engine starts, because the
+    /// engine reads auto_receive from it and its own default is "ask every
+    /// time". The old launcher copied the default in; without a launcher a
+    /// fresh package would sit there asking for confirmation on every photo.
+    ///
+    /// The env var the launcher also set (DROPLINK_AUTO_RECEIVE) is deliberately
+    /// NOT set here: it overrides the file unconditionally, which is why turning
+    /// auto-receive off in the settings page had no effect for as long as the
+    /// launcher was used.
+    /// </summary>
+    private static void EnsureSettings(string dataDirectory)
+    {
+        var settings = Path.Combine(dataDirectory, "settings.json");
+        var fallback = Path.Combine(dataDirectory, "settings.default.json");
+        if (File.Exists(settings) || !File.Exists(fallback)) return;
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            File.Copy(fallback, settings);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private static void FillDirectory(string name, string path)
