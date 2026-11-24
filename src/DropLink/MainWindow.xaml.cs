@@ -5,7 +5,32 @@ using System.Windows;
 namespace DropLink;
 public partial class MainWindow : Window
 {
-    public MainWindow() { InitializeComponent(); Loaded += async (_, _) => await ScanAsync(); }
+    private readonly TransferState transferState = new();
+    private EngineClient? engine;
+    public MainWindow() { InitializeComponent(); Transfers.ItemsSource = transferState.Items; Loaded += async (_, _) => await ScanAsync(); }
+
+    // Only a future validated chain coordinator may call this; no process starts at launch.
+    private void AttachEngine(string python, string script, string addressFile, string directory, string keys, string deviceName)
+    {
+        if (engine is not null) throw new InvalidOperationException("引擎已经启动。");
+        engine = EngineClient.Start(python, script, addressFile, directory, keys, deviceName,
+            OnEngineEvent, code => { _ = Dispatcher.BeginInvoke(() => MessageBox.Show(this, "接收服务已停止。")); });
+    }
+
+    // Called only by a future validated chain coordinator. No engine is started at launch.
+    private void OnEngineEvent(JsonElement message)
+    {
+        _ = Dispatcher.BeginInvoke(async () =>
+        {
+            var row = transferState.Apply(message);
+            if (row is null || !message.TryGetProperty("event", out var kind) || kind.GetString() != "asked") return;
+            var answer = MessageBox.Show(this, $"{row.Sender} 想发送：\n{row.Files}\n\n是否接收？",
+                "接收请求", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+            try { if (engine is not null) await engine.AnswerAsync(row.Id, answer == MessageBoxResult.Yes); }
+            catch (Exception) { row.Status = "无法发送答复"; }
+        });
+    }
+
     private async void Scan_Click(object sender, RoutedEventArgs e) => await ScanAsync();
     private async Task ScanAsync()
     {

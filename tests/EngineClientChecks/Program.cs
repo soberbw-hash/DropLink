@@ -12,6 +12,7 @@ Directory.CreateDirectory(temp);
 try
 {
     RadioPreflightChecks.Run(temp);
+    TransferStateChecks.Run();
     if (!OperatingSystem.IsWindows())
     {
         await using var chain = new BackendChain();
