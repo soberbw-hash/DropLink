@@ -1,23 +1,50 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Windows;
 namespace DropLink;
 public partial class MainWindow : Window
 {
     private readonly TransferState transferState = new();
-    private EngineClient? engine;
-    public MainWindow() { InitializeComponent(); Transfers.ItemsSource = transferState.Items; Loaded += async (_, _) => await ScanAsync(); }
+    private ReceiverSession? session;
+    public MainWindow() { InitializeComponent(); Transfers.ItemsSource = transferState.Items; Loaded += async (_, _) => await ScanAsync(); Closed += async (_, _) => await CloseSessionAsync(); }
 
-    // Only a future validated chain coordinator may call this; no process starts at launch.
-    private void AttachEngine(string python, string script, string addressFile, string directory, string keys, string deviceName)
+    // A future validated chain coordinator calls this; nothing starts at launch.
+    // The receive button stays disabled until device selection and recovery are proven.
+    private async Task StartSessionAsync(
+        ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
+        bool authorized, bool recoveryVerified,
+        string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName)
     {
-        if (engine is not null) throw new InvalidOperationException("引擎已经启动。");
-        engine = EngineClient.Start(python, script, addressFile, directory, keys, deviceName,
-            OnEngineEvent, code => { _ = Dispatcher.BeginInvoke(() => MessageBox.Show(this, "接收服务已停止。")); });
+        if (session is not null) throw new InvalidOperationException("接收会话已经启动。");
+        var created = new ReceiverSession();
+        created.EngineEvent += OnEngineEvent;
+        created.Failed += OnSessionFailed;
+        session = created;
+        try
+        {
+            await created.StartAsync(files, devices, selectedInstance, authorized, recoveryVerified,
+                python, engineScript, outputDirectory, keysDirectory, deviceName);
+        }
+        catch
+        {
+            await created.DisposeAsync();
+            session = null;
+            throw;
+        }
     }
 
-    // Called only by a future validated chain coordinator. No engine is started at launch.
+    private async Task CloseSessionAsync()
+    {
+        var current = session;
+        session = null;
+        if (current is not null) await current.DisposeAsync();
+    }
+
+    private void OnSessionFailed(string message) =>
+        _ = Dispatcher.BeginInvoke(() => MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning));
+
+    // Engine facts are applied on the UI thread; an 'asked' event triggers an
+    // explicit confirmation whose answer is sent back through the session.
     private void OnEngineEvent(JsonElement message)
     {
         _ = Dispatcher.BeginInvoke(async () =>
@@ -26,7 +53,7 @@ public partial class MainWindow : Window
             if (row is null || !message.TryGetProperty("event", out var kind) || kind.GetString() != "asked") return;
             var answer = MessageBox.Show(this, $"{row.Sender} 想发送：\n{row.Files}\n\n是否接收？",
                 "接收请求", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-            try { if (engine is not null) await engine.AnswerAsync(row.Id, answer == MessageBoxResult.Yes); }
+            try { await (session?.AnswerAsync(row.Id, answer == MessageBoxResult.Yes) ?? Task.CompletedTask); }
             catch (Exception) { row.Status = "无法发送答复"; }
         });
     }
@@ -54,7 +81,7 @@ public partial class MainWindow : Window
             foreach (var item in items)
             {
                 var hardware = item.GetProperty("Hardware").GetString() ?? "";
-                if (!Regex.IsMatch(hardware, @"^VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$", RegexOptions.IgnoreCase)) continue;
+                if (!System.Text.RegularExpressions.Regex.IsMatch(hardware, @"^VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
                 var name = item.GetProperty("Name").GetString();
                 var hint = hardware.StartsWith("VID_0BDA&PID_C820", StringComparison.OrdinalIgnoreCase) ? "上游有同 USB ID 的历史验证；本设备未验证" : "未确认兼容性";
                 lines.Add($"{name ?? "未命名设备"}  ·  {hardware}\n{hint}");
