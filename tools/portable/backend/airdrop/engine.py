@@ -240,9 +240,14 @@ def notify_received(folder, names):
                 # -MessageB64 / -ImageB64 bind to nothing and kill the whole
                 # toast. '~' is the agreed stand-in for "empty".
                 return base64.b64encode(str(text).encode('utf-8')).decode('ascii') or '~'
-            # Clipboard payload: the received file name(s), matching the
-            # DropBridge-style "copy to clipboard" button in the toast.
-            clip_text = '\n'.join(names) if names else ''
+            # Clipboard payload: the received files themselves, one full path
+            # per line. The toast button puts those files on the clipboard, so
+            # pasting into a chat or an editor yields the photo - copying a bare
+            # file name is not "copy to clipboard" in any sense the user means.
+            clip_text = '\n'.join(os.path.join(folder, str(n)) for n in names) if names else ''
+            # Which file the "open folder" button should select. Without it the
+            # folder opens on a list of UUID names and the photo reads as lost.
+            first_name = str(names[0]) if names else ''
             # Inline preview: first received image that actually exists on
             # disk. Stored() names may be plain strings or Stored objects.
             image_suffixes = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.tif', '.tiff')
@@ -262,7 +267,8 @@ def notify_received(folder, names):
                     '-ClipB64', b64(clip_text),
                     '-OpenLabelB64', b64('打开接收文件夹'),
                     '-ClipLabelB64', b64('复制到剪贴板'),
-                    '-ImageB64', b64(preview)]
+                    '-ImageB64', b64(preview),
+                    '-SelectB64', b64(first_name)]
             # CREATE_NO_WINDOW: the engine is started without a console, so a
             # console child would otherwise get a fresh, *visible* one - a black
             # PowerShell box popping up right after a file arrives.

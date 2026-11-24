@@ -573,6 +573,31 @@ def numbered(name, number):
     return name if number == 0 else f'{stem}-{number}{ext}'
 
 
+# An iPhone names a photo after its own asset key:
+# "C8F41611-1285-46BD-885D-D27C8B6C9ED6.PNG". That is a database id, not a
+# name. A receive folder full of them cannot be read at a glance, and a photo
+# nobody recognises looks like a photo that never arrived.
+ASSET_KEY = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    re.IGNORECASE)
+VIDEO_SUFFIXES = ('.mov', '.mp4', '.m4v', '.avi')
+
+
+def readable_name(name, when=None):
+    """Turn a bare asset key into "照片 2026-11-25 02.18.32.png".
+
+    Only names that are nothing but an asset key are touched: anything the
+    sender actually named keeps its name, because that name may be the only
+    thing the sender recognises on the other side.
+    """
+    stem, ext = os.path.splitext(name)
+    if not ext or not ASSET_KEY.match(stem):
+        return name
+    kind = '视频' if ext.lower() in VIDEO_SUFFIXES else '照片'
+    stamp = time.strftime(' %Y-%m-%d %H.%M.%S', when or time.localtime())
+    return kind + stamp + ext.lower()
+
+
 def _extract(archive, dest, budget, created):
     written = []
     live_photo_numbers = {}
@@ -599,6 +624,10 @@ def _extract(archive, dest, budget, created):
                 live_photo_numbers[live_photo] = free_number(
                     dest, os.path.splitext(wanted)[0])
             wanted = numbered(wanted, live_photo_numbers[live_photo])
+        else:
+            # Never for a Live Photo: its two members must keep one stem, and
+            # two calls to readable_name can straddle a second boundary.
+            wanted = readable_name(wanted)
         name, output = open_new(dest, wanted)
         created.append(name)
         with output:

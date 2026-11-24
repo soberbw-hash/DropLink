@@ -8,7 +8,8 @@ param(
     [string]$ClipB64 = '~',
     [string]$OpenLabelB64 = '~',
     [string]$ClipLabelB64 = '~',
-    [string]$ImageB64 = '~'
+    [string]$ImageB64 = '~',
+    [string]$SelectB64 = '~'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -131,6 +132,9 @@ try {
     $openLbl = From-B64 $OpenLabelB64
     $clipLbl = From-B64 $ClipLabelB64
     $imagePath = Stage-Preview (From-B64 $ImageB64)
+    # The file the "open folder" button should select. Opening the folder alone
+    # leaves the user hunting for one UUID-named photo among many.
+    $selectName = From-B64 $SelectB64
     if (-not $openLbl) { $openLbl = 'Open folder' }
     if (-not $clipLbl) { $clipLbl = 'Copy to clipboard' }
 
@@ -140,7 +144,7 @@ try {
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
     $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
 
-    $openUri = 'droplink:open?folder=' + (To-UrlB64 $folder)
+    $openUri = 'droplink:open?folder=' + (To-UrlB64 $folder) + '&file=' + (To-UrlB64 $selectName)
     $clipUri = 'droplink:clip?text=' + (To-UrlB64 $clip) + '&folder=' + (To-UrlB64 $folder)
 
     $doc = [Windows.Data.Xml.Dom.XmlDocument]::new()
