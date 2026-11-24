@@ -11,6 +11,17 @@ var temp = Path.Combine(Path.GetTempPath(), "droplink-test-" + Guid.NewGuid().To
 Directory.CreateDirectory(temp);
 try
 {
+    RadioPreflightChecks.Run(temp);
+    if (!OperatingSystem.IsWindows())
+    {
+        await using var chain = new BackendChain();
+        try
+        {
+            await chain.StartAsync(new ChainFiles("x", "x", "x", "x"), [], "", false, false, CancellationToken.None);
+            throw new Exception("chain should not run on Linux");
+        }
+        catch (PlatformNotSupportedException) { Console.WriteLine("PASS: Windows-only chain fails closed on Linux"); }
+    }
     await using (var client = EngineClient.Start(python, mock, Path.Combine(temp, "address"), temp, temp,
         "测试 device", evt =>
         {
