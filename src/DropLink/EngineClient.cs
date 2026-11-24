@@ -1,0 +1,128 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+
+namespace DropLink;
+
+// Experimental IPC client only. It does not start the radio or install drivers.
+// The UI must not enable receiving until the entire chain is validated.
+internal sealed class EngineClient : IAsyncDisposable
+{
+    private readonly Process process;
+    private readonly Task eventReader;
+    private readonly Task errorReader;
+    private readonly Task exitObserver;
+    private readonly SemaphoreSlim writeLock = new(1, 1);
+    private int stopping;
+
+    private readonly Action<JsonElement> eventReceived;
+    private readonly Action<int> exited;
+
+    private EngineClient(Process process, Action<JsonElement> eventReceived, Action<int> exited)
+    {
+        this.process = process;
+        this.eventReceived = eventReceived;
+        this.exited = exited;
+        eventReader = ReadEventsAsync();
+        errorReader = DrainErrorsAsync();
+        exitObserver = ObserveExitAsync();
+    }
+
+    public static EngineClient Start(string python, string engine, string addressFile,
+        string outputDirectory, string keysDirectory, string deviceName,
+        Action<JsonElement> eventReceived, Action<int> exited)
+    {
+        foreach (var file in new[] { python, engine })
+            if (!File.Exists(file)) throw new FileNotFoundException("Backend executable or script is missing.", file);
+        if (!Directory.Exists(outputDirectory)) throw new DirectoryNotFoundException("Receive directory does not exist.");
+        if (string.IsNullOrWhiteSpace(deviceName)) throw new ArgumentException("Device name is required.", nameof(deviceName));
+        var info = new ProcessStartInfo(python)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(engine))!
+        };
+        foreach (string arg in new[] { "-u", Path.GetFullPath(engine), "--proxy-address-file", Path.GetFullPath(addressFile),
+                    "--outdir", Path.GetFullPath(outputDirectory), "--keys", Path.GetFullPath(keysDirectory), "--name", deviceName })
+            info.ArgumentList.Add(arg);
+        var child = Process.Start(info) ?? throw new InvalidOperationException("Could not start receiver engine.");
+        return new EngineClient(child, eventReceived, exited);
+    }
+
+    public Task AnswerAsync(string id, bool accept) => SendAsync(new { @do = "answer", id, accept });
+
+    private async Task SendAsync(object command)
+    {
+        await writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (Volatile.Read(ref stopping) != 0 || process.HasExited)
+                throw new InvalidOperationException("Receiver engine is not running.");
+            await process.StandardInput.WriteLineAsync(JsonSerializer.Serialize(command)).ConfigureAwait(false);
+            await process.StandardInput.FlushAsync().ConfigureAwait(false);
+        }
+        finally { writeLock.Release(); }
+    }
+
+    private async Task ReadEventsAsync()
+    {
+        try
+        {
+            while (await process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
+            {
+                try
+                {
+                    using var json = JsonDocument.Parse(line);
+                    if (json.RootElement.ValueKind == JsonValueKind.Object &&
+                        json.RootElement.TryGetProperty("event", out var value) && value.ValueKind == JsonValueKind.String)
+                        eventReceived(json.RootElement.Clone());
+                }
+                catch (JsonException) { /* Ignore malformed output; never treat it as a success event. */ }
+            }
+        }
+        catch (IOException) { }
+    }
+
+    private async Task DrainErrorsAsync()
+    {
+        try { while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
+        catch (IOException) { }
+    }
+
+    private async Task ObserveExitAsync()
+    {
+        await process.WaitForExitAsync().ConfigureAwait(false);
+        await eventReader.ConfigureAwait(false);
+        if (Volatile.Read(ref stopping) == 0) exited(process.ExitCode);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref stopping, 1) != 0) return;
+        await writeLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!process.HasExited)
+            {
+                try
+                {
+                    await process.StandardInput.WriteLineAsync("{\"do\":\"quit\"}").ConfigureAwait(false);
+                    await process.StandardInput.FlushAsync().ConfigureAwait(false);
+                    process.StandardInput.Close();
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is IOException or OperationCanceledException or InvalidOperationException)
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                }
+            }
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            await Task.WhenAll(eventReader, errorReader, exitObserver).ConfigureAwait(false);
+        }
+        finally { writeLock.Release(); process.Dispose(); }
+    }
+}
