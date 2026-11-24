@@ -38,17 +38,29 @@ if (-not (Test-Path -LiteralPath $exe)) { throw ('missing ' + $exe) }
 
 if (-not (Test-Path -LiteralPath $Target)) { New-Item -ItemType Directory -Path $Target -Force | Out-Null }
 $dest = Join-Path $Target 'DropLink.exe'
+# A running DropLink holds its own image, so it cannot be overwritten - but it
+# can be renamed, which is how an update lands without asking the user to quit
+# first. The renamed copy is only ever used by the process that is already
+# running; the file on disk is the new build. It is cleaned up here on the next
+# publish, once nothing holds it.
+$old = Join-Path $Target 'DropLink.exe.old'
+if (Test-Path -LiteralPath $old) {
+    try { Remove-Item -LiteralPath $old -Force } catch { }
+}
+$renamed = $false
 try {
     Copy-Item -LiteralPath $exe -Destination $dest -Force
 } catch {
-    # A running DropLink holds its own image, so the copy fails. That used to be
-    # worked around by renaming the old exe to .old, which left the user clicking
-    # a stale build and wondering why nothing changed. Refuse loudly instead:
-    # a publish that does not land is worse than no publish at all.
-    $pids = @(Get-Process -Name 'DropLink' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-    $who = ''
-    if ($pids.Count -gt 0) { $who = ' (running pid ' + ($pids -join ', ') + ')' }
-    throw ('cannot replace ' + $dest + ': DropLink is running' + $who + '. Quit DropLink first, then publish again.')
+    try {
+        Move-Item -LiteralPath $dest -Destination $old -Force
+        Copy-Item -LiteralPath $exe -Destination $dest -Force
+        $renamed = $true
+    } catch {
+        $pids = @(Get-Process -Name 'DropLink' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+        $who = ''
+        if ($pids.Count -gt 0) { $who = ' (running pid ' + ($pids -join ', ') + ')' }
+        throw ('cannot replace ' + $dest + ': DropLink is running' + $who + '. Quit DropLink first, then publish again.')
+    }
 }
 
 # Ship the icon next to the executable, not only inside it. The .ico is what a
@@ -66,6 +78,7 @@ if (Test-Path -LiteralPath $art) {
 $info = Get-Item -LiteralPath (Join-Path $Target 'DropLink.exe')
 Write-Output ('OK ' + $info.FullName)
 Write-Output ('bytes=' + $info.Length)
+if ($renamed) { Write-Output ('note=replaced while running; old image renamed to ' + $old) }
 foreach ($extra in @('DropLink.ico', 'icon-source.png')) {
     $path = Join-Path $Target $extra
     if (Test-Path -LiteralPath $path) {
