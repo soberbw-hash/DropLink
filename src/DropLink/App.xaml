@@ -1,4 +1,4 @@
-<Application x:Class="DropLink.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" StartupUri="MainWindow.xaml">
+<Application x:Class="DropLink.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" ShutdownMode="OnExplicitShutdown">
  <Application.Resources>
   <SolidColorBrush x:Key="Accent" Color="#386DE8"/>
   <!-- HarmonyOS Sans SC (open source, SIL OFL) embedded as resource; works on any PC without installing. -->

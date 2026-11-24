@@ -189,8 +189,9 @@ switch ($Action) {
         $ws = New-Object -ComObject WScript.Shell
         $sc = $ws.CreateShortcut($lnk)
         $sc.TargetPath = $target
+        $sc.Arguments = '--tray'
         $sc.WorkingDirectory = $root
-        $sc.Description = 'DropLink'
+        $sc.Description = 'DropLink (tray)'
         $sc.Save()
         Write-Output ("OK " + $msg.On)
     }

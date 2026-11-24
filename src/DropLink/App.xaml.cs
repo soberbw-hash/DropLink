@@ -1,12 +1,18 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using MessageBox = System.Windows.MessageBox;
 
 namespace DropLink;
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
+    private SingleInstance? singleInstance;
+
+    internal static bool StartMinimized { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
+        StartMinimized = e.Args.Contains("--tray", StringComparer.OrdinalIgnoreCase);
         // Self-contained: derive backend/driver paths even if launched by
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
@@ -28,7 +34,9 @@ public partial class App : Application
                     UseShellExecute = true,
                     Verb = "runas"
                 };
-                psi.ArgumentList.Add(retryFlag);
+                foreach (var arg in e.Args) psi.ArgumentList.Add(arg);
+                if (!e.Args.Contains(retryFlag, StringComparer.OrdinalIgnoreCase))
+                    psi.ArgumentList.Add(retryFlag);
                 System.Diagnostics.Process.Start(psi);
                 Shutdown();
                 return;
@@ -37,6 +45,18 @@ public partial class App : Application
             {
                 // Elevation refused: keep running so the UI can explain it.
             }
+        }
+
+        // A second launch should bring the existing window back, not start a
+        // second receiver. The named event wakes the first instance.
+        singleInstance = new SingleInstance(() =>
+            _ = Dispatcher.InvokeAsync(
+                () => (MainWindow as MainWindow)?.ShowFromTray(),
+                DispatcherPriority.ApplicationIdle));
+        if (!singleInstance.IsFirst)
+        {
+            Shutdown();
+            return;
         }
 
         // Last-resort crash guard: never die silently. async void handlers in
@@ -57,5 +77,15 @@ public partial class App : Application
         };
 
         base.OnStartup(e);
+
+        var window = new MainWindow();
+        MainWindow = window;
+        if (!StartMinimized) window.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        singleInstance?.Dispose();
+        base.OnExit(e);
     }
 }

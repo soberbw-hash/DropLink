@@ -1,13 +1,17 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using MessageBox = System.Windows.MessageBox;
 namespace DropLink;
 public partial class MainWindow : Window
 {
     private readonly TransferState transferState = new();
     private ReceiverSession? session;
+    private TrayIcon? tray;
+    private bool exitRequested;
     private GuideStep currentStep = GuideStep.EnvironmentBlocked;
     private bool detailsVisible;
     // Transient status ("正在初始化网卡…") lives on the progress line, not in the
@@ -18,7 +22,54 @@ public partial class MainWindow : Window
         InitializeComponent();
         // Auto-check on launch so the guide is useful the moment the window opens.
         Loaded += async (_, _) => await CheckReadinessAsync();
+        Loaded += (_, _) => EnsureTray();
+        StateChanged += OnStateChanged;
+        Closing += OnClosing;
         Closed += async (_, _) => await CloseSessionAsync();
+        // Windows logoff/shutdown must not be blocked by close-to-tray.
+        System.Windows.Application.Current.SessionEnding += (_, _) => exitRequested = true;
+        // Create the tray before the first Show so autostart can stay hidden.
+        try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
+    }
+
+    private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit);
+
+    // A second launch signals this window back; tray double-click uses the same path.
+    public void ShowFromTray()
+    {
+        if (tray is not null) tray.ShowWindow();
+        else
+        {
+            Show();
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        }
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized && tray is not null) tray.HideWindow();
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (exitRequested) return;
+        // If the tray could not be created, let the window close normally
+        // instead of hiding it with no way to bring it back.
+        if (tray is null) { exitRequested = true; return; }
+        e.Cancel = true;
+        tray.HideWindow();
+    }
+
+    private async void RequestExit()
+    {
+        if (exitRequested) return;
+        exitRequested = true;
+        try { await CloseSessionAsync(); }
+        catch (Exception) { /* exit anyway */ }
+        tray?.Dispose();
+        tray = null;
+        System.Windows.Application.Current.Shutdown();
     }
 
     // A future validated chain coordinator calls this; nothing starts at launch.
@@ -72,7 +123,11 @@ public partial class MainWindow : Window
         {
             var row = transferState.Apply(message);
             RenderTransfer();
-            if (row is null || !message.TryGetProperty("event", out var kind) || kind.GetString() != "asked") return;
+            if (!message.TryGetProperty("event", out var kind)) return;
+            var name = kind.GetString();
+            if (name == "receiving" && message.TryGetProperty("on", out var on))
+                tray?.SetReceiving(on.GetBoolean());
+            if (name != "asked" || row is null) return;
             var answer = MessageBox.Show(this, $"{row.Sender} 想发送：\n{row.Files}\n\n是否接收？",
                 "接收请求", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
             try { await (session?.AnswerAsync(row.Id, answer == MessageBoxResult.Yes) ?? Task.CompletedTask); }

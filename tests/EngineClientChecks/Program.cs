@@ -36,6 +36,8 @@ try
     ReadinessReportChecks.Run(temp);
     SetupGuideChecks.Run(temp);
     UsbTopologyChecks.Run();
+    if (OperatingSystem.IsWindows()) SingleInstanceChecks.Run();
+    else Console.WriteLine("SKIP: single instance is Windows-only");
     await ReceiverSessionChecks.Run(temp);
     TransferStateChecks.Run();
     if (!OperatingSystem.IsWindows())
