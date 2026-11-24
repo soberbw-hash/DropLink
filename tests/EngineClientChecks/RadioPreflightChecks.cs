@@ -20,6 +20,17 @@ internal static class RadioPreflightChecks
         Expect(false, RadioPreflight.Check([good, good], good.InstanceId, true, true, [required]));
         Expect(false, RadioPreflight.Check([good], good.InstanceId, true, true, [Path.Combine(temp, "missing.exe")]));
         Expect(false, RadioPreflight.Check([good], good.InstanceId, true, true, []));
-        Console.WriteLine("PASS: exact identity, driver, authorization, recovery and dependency checks");
+
+        // RTL8811CU (0bda:c811) is the same Jaguar2/8821C silicon, bound as a
+        // whole device (no &MI_02). It must pass with WinUSB while still
+        // refusing the stock Realtek driver.
+        var c811 = new RadioDevice("USB\\VID_0BDA&PID_C811\\5&2AF31B16&0&8", "USB\\VID_0BDA&PID_C811", "WinUSB", "OK");
+        Expect(true, RadioPreflight.Check([c811], c811.InstanceId, true, true, [required]));
+        Expect(false, RadioPreflight.Check([c811 with { Service = "RtlWlanu" }], c811.InstanceId, true, true, [required]));
+        if (!RadioPreflight.IsSupportedUsbId(0x0bda, 0xc811) ||
+            !RadioPreflight.IsSupportedUsbId(0x0bda, 0xc820) ||
+            RadioPreflight.IsSupportedUsbId(0x1d6b, 0x0002))
+            throw new Exception("supported USB id table is wrong");
+        Console.WriteLine("PASS: exact identity, C811/C820 chips, driver, authorization, recovery and dependency checks");
     }
 }

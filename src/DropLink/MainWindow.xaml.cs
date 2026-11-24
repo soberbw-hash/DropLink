@@ -73,7 +73,7 @@ public partial class MainWindow : Window
                 .Select(k => Environment.GetEnvironmentVariable(k) ?? "").ToArray();
             bool authorized = EnvFlag("DROPLINK_AUTHORIZED");
             bool recovery = EnvFlag("DROPLINK_RECOVERY_VERIFIED");
-            var c820 = devices.Where(d => d.HardwareId.Equals(RadioPreflight.KnownHardwareId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var c820 = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)).ToArray();
             var selected = c820.Length == 1 ? c820[0].InstanceId : "";
             var report = ReadinessReport.Build(new ReadinessReport.Input(devices, selected, files, authorized, recovery));
             ReceiveStatus.Text = report;
@@ -93,10 +93,16 @@ public partial class MainWindow : Window
         try
         {
             var devices = await QueryRadioDevicesAsync();
-            var c820 = devices.Where(d => d.HardwareId.Equals(RadioPreflight.KnownHardwareId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var c820 = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)).ToArray();
             var target = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
+            // libusb lists every USB device; keep only supported Realtek radios
+            // and require a single candidate before letting radio open strictly.
             UsbDeviceSnapshot? selectedTarget = null;
-            if (target.Error is null && target.Devices.Count == 1) selectedTarget = target.Devices[0];
+            if (target.Error is null)
+            {
+                var radios = target.Devices.Where(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)).ToArray();
+                if (radios.Length == 1) selectedTarget = radios[0];
+            }
             var files = new ChainFiles(
                 Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_BRIDGE_EXE") ?? "",
@@ -169,7 +175,7 @@ public partial class MainWindow : Window
                 var hardware = item.GetProperty("Hardware").GetString() ?? "";
                 if (!System.Text.RegularExpressions.Regex.IsMatch(hardware, @"^VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
                 var name = item.GetProperty("Name").GetString();
-                var hint = hardware.StartsWith("VID_0BDA&PID_C820", StringComparison.OrdinalIgnoreCase) ? "上游有同 USB ID 的历史验证；本设备未验证" : "未确认兼容性";
+                var hint = hardware.StartsWith("VID_0BDA&PID_C820", StringComparison.OrdinalIgnoreCase) || hardware.StartsWith("VID_0BDA&PID_C811", StringComparison.OrdinalIgnoreCase) ? "上游支持的 RTL8821C 芯片（需 WinUSB 绑定）" : "未确认兼容性";
                 lines.Add($"{name ?? "未命名设备"}  ·  {hardware}\n{hint}");
             }
             // Optional read-only libusb view. Enabled only when a radio path is
