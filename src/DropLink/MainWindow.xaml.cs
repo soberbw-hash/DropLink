@@ -2,12 +2,22 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls;
 namespace DropLink;
 public partial class MainWindow : Window
 {
     private readonly TransferState transferState = new();
     private ReceiverSession? session;
-    public MainWindow() { InitializeComponent(); Transfers.ItemsSource = transferState.Items; Loaded += async (_, _) => await ScanAsync(); Closed += async (_, _) => await CloseSessionAsync(); }
+    private GuideStep currentStep = GuideStep.EnvironmentBlocked;
+    private bool detailsVisible;
+    public MainWindow()
+    {
+        InitializeComponent();
+        Transfers.ItemsSource = transferState.Items;
+        // Auto-check on launch so the guide is useful the moment the window opens.
+        Loaded += async (_, _) => { await ScanAsync(); await CheckReadinessAsync(); };
+        Closed += async (_, _) => await CloseSessionAsync();
+    }
 
     // A future validated chain coordinator calls this; nothing starts at launch.
     // The receive button stays disabled until device selection and recovery are proven.
@@ -60,12 +70,11 @@ public partial class MainWindow : Window
         });
     }
 
-    // Read-only: reports what is missing instead of leaving a dead grey button.
-    // Never opens a device, changes a driver or starts any backend process.
-    private async void CheckReadiness_Click(object sender, RoutedEventArgs e)
+    // Read-only auto-check: drives the guided card. Never opens a device,
+    // changes a driver or starts any backend process.
+    private async Task CheckReadinessAsync()
     {
-        ReceiveStatus.Text = "正在只读检查…";
-        StartButton.IsEnabled = false;
+        GuideTitle.Text = "正在检查设备与驱动…";
         try
         {
             var devices = await QueryRadioDevicesAsync();
@@ -78,19 +87,95 @@ public partial class MainWindow : Window
                 ? new DeviceInventory.Result([], "未配置后端程序路径")
                 : await Task.Run(() => DeviceInventory.Read(radioExe));
             var (pnp, target) = PickTarget(devices, inventory);
-            var selected = pnp?.InstanceId ?? "";
-            var report = ReadinessReport.Build(new ReadinessReport.Input(devices, selected, files, authorized, recovery));
-            if (target is null && pnp is not null)
-                report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口把它映射到 libusb 设备（可能需重新扫描）。";
+            bool hasTarget = target is not null && BackendChain.ValidatedTargetSelection(target);
+            int readyCards = devices.Count(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)
+                && string.Equals(d.Service, "WinUSB", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase));
+
+            var guide = SetupGuide.Evaluate(new SetupGuide.Input(
+                files, readyCards, hasTarget, authorized, recovery, session is not null));
+            currentStep = guide.Step;
+            ApplyGuide(guide);
+
+            var report = ReadinessReport.Build(new ReadinessReport.Input(
+                devices, pnp?.InstanceId ?? "", files, authorized, recovery));
+            if (pnp is not null && target is null)
+                report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口映射到 libusb 设备（可拔插后重扫）。";
             ReceiveStatus.Text = report;
-            // Enabling means all preconditions are met AND a real libusb target
-            // was resolved. The chain still re-validates everything fail-closed.
-            StartButton.IsEnabled = pnp is not null && target is not null &&
-                BackendChain.ValidatedTargetSelection(target) && authorized && recovery &&
-                files.Length == 4 && files.All(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f));
         }
-        catch (Exception ex) { ReceiveStatus.Text = "检查失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            GuideStepLabel.Text = "检查失败";
+            GuideTitle.Text = "自动检查没有完成";
+            GuideDetail.Text = ex.Message;
+        }
     }
+
+    // Render the guide result into the big card and highlight the current step.
+    private void ApplyGuide(SetupGuideResult guide)
+    {
+        GuideStepLabel.Text = guide.StepLabel;
+        GuideTitle.Text = guide.Title;
+        GuideDetail.Text = guide.Detail;
+        GuideAction.Content = string.IsNullOrEmpty(guide.PrimaryAction) ? "正在接收…" : guide.PrimaryAction;
+        GuideAction.Visibility = guide.PrimaryActionVisible ? Visibility.Visible : Visibility.Collapsed;
+        GuideAction.Background = guide.Step == GuideStep.SwitchDriver
+            ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1B, 0x6E, 0x4A))
+            : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2C, 0x6B, 0xED));
+        GuideAction.BorderBrush = GuideAction.Background;
+
+        int active = guide.Step switch
+        {
+            GuideStep.SwitchDriver or GuideStep.Rescan => 1,
+            GuideStep.StartReceiving => 2,
+            GuideStep.Receiving => 3,
+            _ => 0
+        };
+        HighlightStep(Step1Box, Step1Text, "1  换驱动", active, 1);
+        HighlightStep(Step2Box, Step2Text, "2  开启接收", active, 2);
+        HighlightStep(Step3Box, Step3Text, "3  收文件", active, 3);
+    }
+
+    private static void HighlightStep(Border box, System.Windows.Controls.TextBlock text, string label, int active, int index)
+    {
+        bool isActive = active == index;
+        bool isDone = active > index;
+        box.Background = new System.Windows.Media.SolidColorBrush(isActive
+            ? System.Windows.Media.Color.FromRgb(0xEA, 0xF0, 0xFF)
+            : isDone ? System.Windows.Media.Color.FromRgb(0xE7, 0xF6, 0xEE) : System.Windows.Media.Color.FromRgb(0xF0, 0xF2, 0xF6));
+        text.Foreground = new System.Windows.Media.SolidColorBrush(isActive
+            ? System.Windows.Media.Color.FromRgb(0x2C, 0x6B, 0xED)
+            : isDone ? System.Windows.Media.Color.FromRgb(0x1B, 0x6E, 0x4A) : System.Windows.Media.Color.FromRgb(0x95, 0xA1, 0xB5));
+        text.Text = (isDone ? "✓ " : "") + label;
+    }
+
+    // The single main button dispatches to the right action for this step.
+    private async void GuideAction_Click(object sender, RoutedEventArgs e)
+    {
+        switch (currentStep)
+        {
+            case GuideStep.SwitchDriver:
+                Setup_Click(sender, e);
+                break;
+            case GuideStep.StartReceiving:
+                StartReceive_Click(sender, e);
+                break;
+            case GuideStep.EnvironmentBlocked:
+            case GuideStep.NeedRestart:
+            case GuideStep.Rescan:
+            default:
+                await CheckReadinessAsync();
+                break;
+        }
+    }
+
+    private void ToggleDetails_Click(object sender, RoutedEventArgs e)
+    {
+        detailsVisible = !detailsVisible;
+        ReceiveStatus.Visibility = detailsVisible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void CheckReadiness_Click(object sender, RoutedEventArgs e) => await CheckReadinessAsync();
 
     // Even when enabled, starting still goes through ReceiverSession ->
     // BackendChain, whose ValidatedTargetSelection() safety lock stays closed.
@@ -117,7 +202,7 @@ public partial class MainWindow : Window
                 Environment.GetEnvironmentVariable("DROPLINK_KEYS_DIR") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_DEVICE_NAME") ?? "DropLink",
                 selectedTarget);
-            ReceiveStatus.Text = "接收链路已启动。";
+            await CheckReadinessAsync(); // advance the guide to "receiving" (step 3)
         }
         catch (Exception ex) { ReceiveStatus.Text = "启动失败：" + ex.Message; }
     }

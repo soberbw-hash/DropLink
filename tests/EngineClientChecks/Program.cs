@@ -13,6 +13,7 @@ try
 {
     RadioPreflightChecks.Run(temp);
     ReadinessReportChecks.Run(temp);
+    SetupGuideChecks.Run(temp);
     UsbTopologyChecks.Run();
     await ReceiverSessionChecks.Run(temp);
     TransferStateChecks.Run();
