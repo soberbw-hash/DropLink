@@ -101,6 +101,21 @@ class FitNameTests(unittest.TestCase):
         self.assertEqual(engine._toast_width('ab'), 2)
         self.assertEqual(engine._toast_width('照片'), 4)
 
+    def test_live_photo_says_what_it_is(self):
+        # One photo on the phone, two files on the PC. "2 个文件" tells the user
+        # nothing about why, and the video is the half that will not open.
+        still, video = 'IMG_4147.jpg', 'IMG_4147.MOV'
+        title, body = engine.toast_text([still, video], True, [[still, video]])
+        self.assertEqual(title, '实况图 · IMG_4147.jpg')
+        self.assertEqual(body, '视频 IMG_4147.MOV')
+
+    def test_live_photo_name_still_fits_one_line(self):
+        long = '这是一个非常非常长的实况图名字用来测试宽度计算.jpg'
+        still, video = long, long.replace('.jpg', '.MOV')
+        title, body = engine.toast_text([still, video], True, [[still, video]])
+        for line in (title, body):
+            self.assertLessEqual(engine._toast_width(line), engine.TOAST_LINE_WIDTH)
+
 
 if __name__ == '__main__':
     unittest.main()

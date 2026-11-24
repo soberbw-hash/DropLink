@@ -180,7 +180,7 @@ def fit_name(name, limit=TOAST_LINE_WIDTH):
     return kept + '…' + ext
 
 
-def toast_text(names, show_format=True):
+def toast_text(names, show_format=True, live=None):
     """Title and optional second line for the completion toast.
 
     The notification already carries the app name in its header, so starting the
@@ -193,6 +193,17 @@ def toast_text(names, show_format=True):
     Kept as a plain function so the wording can be tested without a desktop.
     """
     names = [str(n) for n in names]
+    if live:
+        # A Live Photo is one photo on the phone and two files here. Saying
+        # "2 个文件" is not an explanation, and the video is the half that
+        # will not open on a PC - which reads as "the file is broken".
+        still, video = str(live[0][0]), str(live[0][1])
+        prefix = '实况图 · '
+        title = prefix + fit_name(os.path.basename(still),
+                                  TOAST_LINE_WIDTH - _toast_width(prefix))
+        tail = '视频 '
+        return title, tail + fit_name(os.path.basename(video),
+                                      TOAST_LINE_WIDTH - _toast_width(tail))
     count = len(names)
     if count == 1:
         title = fit_name(names[0])
@@ -225,7 +236,7 @@ def toast_text(names, show_format=True):
     return title, body
 
 
-def notify_received(folder, names):
+def notify_received(folder, names, live=None):
     """Best-effort Windows toast on completion; never blocks or breaks reception."""
     def _run():
         try:
@@ -234,7 +245,7 @@ def notify_received(folder, names):
             if not os.path.exists(script):
                 return
             title, label = toast_text(names, load_settings().get(
-                'show_format_in_notification', True))
+                'show_format_in_notification', True), live)
             def b64(text):
                 # PowerShell drops an empty argument outright, which would make
                 # -MessageB64 / -ImageB64 bind to nothing and kill the whole
@@ -432,12 +443,13 @@ class Incoming(receiver.Watcher):
 
     def stored(self, token, names):
         folder = token.folder or self.settings.dest
+        live = transfer.live_photos(names)
         self.events.say('stored', id=token.key, folder=folder,
-                        names=names, live=transfer.live_photos(names))
+                        names=names, live=live)
         if getattr(self.settings, 'auto_receive', False):
             extra = make_still_copies(folder, names)
             shown = [str(n) for n in names] + extra
-            notify_received(folder, shown)
+            notify_received(folder, shown, live)
 
     def upload_failed(self, token, reason):
         self.events.say('lost', id=token.key, reason=reason)
