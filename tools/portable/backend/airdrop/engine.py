@@ -164,7 +164,9 @@ def notify_received(folder, names):
             # usable here (Live Photos get a plain still copy separately).
             try:
                 if load_settings().get('show_format_in_notification', True):
-                    suffixes = {os.path.splitext(str(n))[1].lower() for n in names}
+                    # ".png" reads like a typo in a sentence; "PNG" reads like
+                    # a format. Same information, one less question.
+                    suffixes = {os.path.splitext(str(n))[1].lstrip('.').upper() for n in names}
                     suffixes = {s for s in suffixes if s}
                     if suffixes:
                         label += '\n电脑可查看：' + ' '.join(sorted(suffixes))

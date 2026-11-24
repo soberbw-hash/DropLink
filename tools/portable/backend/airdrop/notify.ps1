@@ -11,6 +11,14 @@ param(
     [string]$ImageB64 = ''
 )
 $ErrorActionPreference = 'Stop'
+
+# Our own AppUserModelID. Borrowing someone else's (the old code used
+# Microsoft.Windows.Explorer) makes Windows label the toast with that app's
+# name and icon, and silently refuses to load a local file:// image because
+# the notification platform has no identity to resolve it against.
+$Aumid = 'DropLink.Receiver'
+$FallbackAumid = 'Microsoft.Windows.Explorer'
+
 function From-B64([string]$s) {
     if (-not $s) { return '' }
     try { return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($s)) }
@@ -21,6 +29,23 @@ function To-UrlB64([string]$s) {
     $b = [System.Text.Encoding]::UTF8.GetBytes($s)
     return ([System.Convert]::ToBase64String($b)).Replace('+','-').Replace('/','_').TrimEnd('=')
 }
+
+# Register the identity so the toast is attributed to DropLink with its icon.
+# HKCU\Software\Classes\AppUserModelId is the documented way for a desktop app
+# without an MSIX package to own a toast identity.
+function Ensure-Aumid {
+    try {
+        $key = 'HKCU:\Software\Classes\AppUserModelId\' + $Aumid
+        if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+        New-ItemProperty -Path $key -Name 'DisplayName' -Value 'DropLink' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'IconBackgroundColor' -Value 'FF1F6FEB' -PropertyType String -Force | Out-Null
+        $exe = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'app\DropLink.exe'
+        if (Test-Path -LiteralPath $exe) {
+            New-ItemProperty -Path $key -Name 'IconUri' -Value $exe -PropertyType String -Force | Out-Null
+        }
+    } catch { }
+}
+
 function Ensure-Protocol {
     try {
         $here = Split-Path -Parent $PSCommandPath
@@ -35,6 +60,63 @@ function Ensure-Protocol {
         New-ItemProperty -Path $cmdPath -Name '(Default)' -Value $command -PropertyType String -Force | Out-Null
     } catch { }
 }
+
+# Copy the preview next to the profile instead of pointing at the receive
+# folder. Three reasons: the received file may be moved or renamed before the
+# toast renders; the install path can contain non-ASCII characters, which the
+# toast host does not reliably percent-decode; and a camera original is far
+# past the size the toast host will accept, so it has to be re-encoded small.
+function Stage-Preview([string]$source) {
+    if (-not $source) { return '' }
+    if (-not (Test-Path -LiteralPath $source)) { return '' }
+    $dir = Join-Path $env:LOCALAPPDATA 'DropLink\toast'
+    try { New-Item -ItemType Directory -Path $dir -Force | Out-Null } catch { return '' }
+    # Keep the folder from growing forever; the toast only needs seconds.
+    try {
+        Get-ChildItem -LiteralPath $dir -Filter 'preview-*' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip 6 |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    } catch { }
+
+    $target = Join-Path $dir ('preview-' + [guid]::NewGuid().ToString('N') + '.jpg')
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $img = [System.Drawing.Image]::FromFile($source)
+        try {
+            $max = 320.0
+            $scale = [Math]::Min(1.0, [Math]::Min($max / $img.Width, $max / $img.Height))
+            $w = [int][Math]::Max(1, [Math]::Round($img.Width * $scale))
+            $h = [int][Math]::Max(1, [Math]::Round($img.Height * $scale))
+            $bmp = New-Object System.Drawing.Bitmap $w, $h
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            # JPEG has no alpha; fill white first so transparent PNGs do not
+            # come out with black corners.
+            $g.Clear([System.Drawing.Color]::White)
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.DrawImage($img, 0, 0, $w, $h)
+            $g.Dispose()
+            $bmp.Save($target, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+            $bmp.Dispose()
+        } finally { $img.Dispose() }
+        if ((Test-Path -LiteralPath $target) -and (Get-Item -LiteralPath $target).Length -gt 0) { return $target }
+    } catch { }
+
+    # Fallback for formats System.Drawing cannot decode (HEIC without the
+    # codec): hand the original over untouched, but only when it is small
+    # enough that the toast host will still accept it.
+    try {
+        if ((Get-Item -LiteralPath $source).Length -le 2000000) {
+            $ext = [System.IO.Path]::GetExtension($source)
+            if (-not $ext) { $ext = '.png' }
+            $raw = Join-Path $dir ('preview-' + [guid]::NewGuid().ToString('N') + $ext)
+            Copy-Item -LiteralPath $source -Destination $raw -Force
+            return $raw
+        }
+    } catch { }
+    return ''
+}
+
 try {
     $folder  = From-B64 $FolderB64
     $title   = From-B64 $TitleB64
@@ -42,10 +124,11 @@ try {
     $clip    = From-B64 $ClipB64
     $openLbl = From-B64 $OpenLabelB64
     $clipLbl = From-B64 $ClipLabelB64
-    $imagePath = From-B64 $ImageB64
+    $imagePath = Stage-Preview (From-B64 $ImageB64)
     if (-not $openLbl) { $openLbl = 'Open folder' }
     if (-not $clipLbl) { $clipLbl = 'Copy to clipboard' }
 
+    Ensure-Aumid
     Ensure-Protocol
 
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -66,11 +149,13 @@ try {
     $texts = $doc.GetElementsByTagName('text')
     $texts.Item(0).InnerText = $title
     $texts.Item(1).InnerText = $message
-    # Optional inline preview image (e.g. the received photo).
-    if ($imagePath -and (Test-Path $imagePath)) {
+    # Optional inline preview image (e.g. the received photo). hint-crop=none
+    # keeps the whole frame instead of centre-cropping it into a square.
+    if ($imagePath) {
         try {
             $img = $doc.CreateElement('image')
             $img.SetAttribute('placement', 'inline')
+            $img.SetAttribute('hint-crop', 'none')
             $img.SetAttribute('src', ([System.Uri]::new($imagePath)).AbsoluteUri)
             $binding = $doc.GetElementsByTagName('binding').Item(0)
             $binding.AppendChild($img) | Out-Null
@@ -85,7 +170,12 @@ try {
     $acts.Item(1).SetAttribute('arguments', $clipUri)
 
     $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
-    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Microsoft.Windows.Explorer').Show($toast)
+    try {
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show($toast)
+    } catch {
+        # A machine that refuses the custom identity must still show something.
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($FallbackAumid).Show($toast)
+    }
 } catch {
     [System.IO.File]::AppendAllText(
         (Join-Path $PSScriptRoot 'notify-error.log'),
