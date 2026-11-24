@@ -11,6 +11,8 @@ var temp = Path.Combine(Path.GetTempPath(), "droplink-test-" + Guid.NewGuid().To
 Directory.CreateDirectory(temp);
 try
 {
+    var realExeDir = Path.Combine(root, "src/DropLink/bin/Release/net10.0-windows");
+    AppPathsChecks.Run(realExeDir);
     RadioPreflightChecks.Run(temp);
     ReadinessReportChecks.Run(temp);
     SetupGuideChecks.Run(temp);
