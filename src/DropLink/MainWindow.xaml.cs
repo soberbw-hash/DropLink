@@ -253,6 +253,11 @@ public partial class MainWindow : Window
             return;
         try
         {
+            // The script host only accepts .ps1 paths. If a .cmd/.bat wrapper was
+            // configured, run the sibling .ps1 instead so -Force still applies
+            // and stdout/stderr stay capturable.
+            script = ResolvePowerShellScript(script);
+
             // Run the script directly (no cmd.exe hop) and capture its output.
             // If the app somehow lost elevation, the script says so on stdout
             // instead of failing silently.
@@ -297,6 +302,13 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "启动失败：" + ex.Message + "\n\n请右键以管理员身份运行：\n" + script,
                 "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private static string ResolvePowerShellScript(string path)
+    {
+        if (path.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase)) return path;
+        var sibling = Path.ChangeExtension(path, ".ps1");
+        return File.Exists(sibling) ? sibling : path;
     }
 
     // The switch script logs every stage; surfacing the tail here means a

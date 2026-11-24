@@ -53,11 +53,12 @@ internal static class AppPaths
             FillDirectory("DROPLINK_KEYS_DIR", Path.Combine(work.FullName, "data", "keys"));
             FillValue("DROPLINK_DEVICE_NAME", "DropLink");
 
-            // Portable driver kit: ASCII entry points, so a cmd script never has
-            // to survive a GBK/UTF-8 round trip through a Chinese filename.
+            // Portable driver kit: point at the .ps1 directly. The app runs it
+            // through the PowerShell host, which rejects a .cmd path. The .cmd
+            // wrappers stay for people who double-click them.
             var kit = Path.Combine(work.FullName, "_backup", "droplink-driver");
-            Fill("DROPLINK_SETUP_CMD", Path.Combine(kit, "Switch-WinUSB.cmd"));
-            Fill("DROPLINK_ROLLBACK_CMD", Path.Combine(kit, "Restore-Driver.cmd"));
+            Fill("DROPLINK_SETUP_CMD", Path.Combine(kit, "Switch-WinUSB.ps1"));
+            Fill("DROPLINK_ROLLBACK_CMD", Path.Combine(kit, "Restore-Driver.ps1"));
         }
         else
         {
