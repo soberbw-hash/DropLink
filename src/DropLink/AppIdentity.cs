@@ -50,11 +50,15 @@ internal static class AppIdentity
             // The .ico, not the exe: the shell caches a resolved icon per path,
             // and an IconUri that keeps naming DropLink.exe keeps serving the
             // icon it cached the first time that path was seen.
+            //
+            // Only a real install has the .ico next to the exe. A dev build or
+            // the asInvoker probe runs from somewhere else, and pointing the
+            // live registration at a temp folder would break the shipped app's
+            // icon the next time it starts.
             var folder = Path.GetDirectoryName(Environment.ProcessPath ?? "") ?? AppContext.BaseDirectory;
             var ico = Path.Combine(folder, "DropLink.ico");
-            var exe = Environment.ProcessPath ?? "";
-            var wanted = File.Exists(ico) ? ico : (File.Exists(exe) ? exe : "");
-            if (wanted.Length == 0) return;
+            if (!File.Exists(ico)) return;
+            var wanted = ico;
 
             var current = key.GetValue("IconUri") as string;
             if (string.Equals(current, wanted, StringComparison.OrdinalIgnoreCase)) return;
