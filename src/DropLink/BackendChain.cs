@@ -22,7 +22,7 @@ internal sealed class BackendChain : IAsyncDisposable
     // This method must never be wired to an automatic startup or driver installation path.
     internal async Task<string> StartAsync(ChainFiles files, IReadOnlyList<RadioDevice> devices,
         string selectedInstance, bool authorized, bool recoveryVerified, CancellationToken cancel,
-        UsbDeviceSnapshot? selectedTarget = null)
+        UsbDeviceSnapshot? selectedTarget = null, bool allowLegacySingleDevice = false)
     {
         await lifecycle.WaitAsync(cancel).ConfigureAwait(false);
         try
@@ -32,45 +32,37 @@ internal sealed class BackendChain : IAsyncDisposable
             var check = RadioPreflight.Check(devices, selectedInstance, authorized, recoveryVerified,
                 [files.Radio, files.Bridge, files.Netd, files.Awdld]);
             if (!check.Ready) throw new InvalidOperationException(string.Join(" ", check.Problems));
-            // The upstream radio opened by VID/PID (first match); the pinned
-            // patch now accepts AIRBRIDGE_USB_BUS/PORT for strict topology. But
-            // a topology value is only safe if it was resolved from the user's
-            // selected PnP instance and verified on real hardware — neither is
-            // proven here, so the safety lock stays closed. This method NEVER
-            // fabricates a bus/port or substitutes a VID/PID-only open.
-            if (!ValidatedTargetSelection(selectedTarget))
-                throw new NotSupportedException("无线后端尚不能安全地精确选择目标设备；接收已禁用。");
+            // Two ways to pin the device:
+            //  1. strict: a libusb topology target resolved from the selected PnP
+            //     instance (needs a backend with --list-devices).
+            //  2. legacy: the bundled backend predates --list-devices, so the
+            //     radio opens by VID/PID. RadioPreflight already proved that
+            //     exactly one supported card is present and it is the selected
+            //     one, so a VID/PID open cannot pick a different adapter.
+            bool strict = ValidatedTargetSelection(selectedTarget);
+            if (!strict && !(allowLegacySingleDevice && selectedTarget is null))
+                throw new NotSupportedException("无法唯一定位无线网卡；接收已禁用。");
             radioStop = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\DropBridgeRadioStop", out bool created);
             if (!created) throw new InvalidOperationException("另一接收链路正在运行或停止事件已存在。");
             sessionDirectory = Path.Combine(Path.GetTempPath(), "DropLink-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(sessionDirectory);
-            string addressFile = Path.Combine(sessionDirectory, "awdl.addr");
             await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
                 "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(120), cancel).ConfigureAwait(false);
             await StartStage(files.Bridge, [], [], "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
+            // The bundled awdl_netd has no address-file mode; the engine binds
+            // the awdl0 adapter itself, so netd is only the mDNS/DNS-SD proxy.
             await StartStage(files.Netd, [], new Dictionary<string, string?> {
-                ["AWDL_NETD_MDNS_PROXY"] = "1", ["AWDL_NETD_ADDR_FILE"] = addressFile
+                ["AWDL_NETD_MDNS_PROXY"] = "1"
             }, "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
             await StartStage(files.Awdld, ["-c", "149", "-s", "1", "-j", "400", "-v"], new Dictionary<string, string?> {
                 ["AWDL_ELECTION_METRIC"] = "200", ["AWDL_ELECTION_COUNTER"] = "100000",
                 ["AWDL_CHANSEQ"] = "social", ["AWDL_FOLLOW_MASTER_SEQ"] = null
             }, "host interface", TimeSpan.FromSeconds(60), cancel).ConfigureAwait(false);
-            using var addressTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            addressTimeout.CancelAfter(TimeSpan.FromSeconds(60));
-            while (true)
-            {
-                addressTimeout.Token.ThrowIfCancellationRequested();
-                if (processes.Any(p => p.HasExited)) throw new InvalidOperationException("后端在初始化期间退出。");
-                try
-                {
-                    var text = (await File.ReadAllTextAsync(addressFile, addressTimeout.Token).ConfigureAwait(false)).Trim();
-                    if (IPAddress.TryParse(text, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv6LinkLocal) break;
-                }
-                catch (IOException) { }
-                await Task.Delay(250, addressTimeout.Token).ConfigureAwait(false);
-            }
+            // awdld publishes the awdl0 adapter a moment after it logs "host
+            // interface"; the engine polls for it and binds once it is there.
+            await Task.Delay(TimeSpan.FromSeconds(2), cancel).ConfigureAwait(false);
             started = true;
-            return addressFile;
+            return "";
         }
         catch
         {

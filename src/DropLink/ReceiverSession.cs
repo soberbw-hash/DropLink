@@ -22,17 +22,19 @@ internal sealed class ReceiverSession : IAsyncDisposable
         ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
         bool authorized, bool recoveryVerified,
         string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName,
-        UsbDeviceSnapshot? selectedTarget = null, CancellationToken cancel = default)
+        UsbDeviceSnapshot? selectedTarget = null, bool allowLegacySingleDevice = false,
+        CancellationToken cancel = default)
     {
         await lifecycle.WaitAsync(cancel).ConfigureAwait(false);
         try
         {
             if (started || engine is not null) throw new InvalidOperationException("接收会话已启动。");
             chain.Failed += OnChainFailed;
-            // Safety lock lives in BackendChain.StartAsync. With it closed this
-            // throws before any engine process is created.
+            // The device gate lives in BackendChain.StartAsync; it throws before
+            // any engine process is created when no target can be proven.
             var addressFile = await chain.StartAsync(
-                files, devices, selectedInstance, authorized, recoveryVerified, cancel, selectedTarget).ConfigureAwait(false);
+                files, devices, selectedInstance, authorized, recoveryVerified, cancel, selectedTarget,
+                allowLegacySingleDevice).ConfigureAwait(false);
             try
             {
                 engine = EngineClient.Start(python, engineScript, addressFile, outputDirectory,

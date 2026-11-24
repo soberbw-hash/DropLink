@@ -1,12 +1,13 @@
-<Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink" Width="760" Height="500" MinWidth="620" MinHeight="460" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
- <Grid Margin="40,34,40,32"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+<Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink" Width="800" Height="660" MinWidth="700" MinHeight="620" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
+ <Grid Margin="40,30,40,26"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
   <StackPanel><TextBlock Text="DropLink" FontSize="28" FontWeight="SemiBold" Foreground="#17233C"/><TextBlock Text="把 iPhone 的照片和文件隔空投送到这台电脑" Foreground="#66758D" Margin="0,5,0,0"/></StackPanel>
 
-  <!-- One card, one instruction: the guide always states the current step and the next action. -->
-  <Border Grid.Row="1" CornerRadius="18" Background="White" Padding="30,26" Margin="0,24,0,0" BorderBrush="#E4E9F2" BorderThickness="1" VerticalAlignment="Top">
+  <!-- One card, one instruction. Nothing here scrolls away: the window is
+       sized so the title, the action and the diagnostics are always visible. -->
+  <Border Grid.Row="1" CornerRadius="18" Background="White" Padding="30,24" Margin="0,20,0,0" BorderBrush="#E4E9F2" BorderThickness="1" VerticalAlignment="Top">
    <StackPanel>
     <!-- Step indicator -->
-    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
      <Border x:Name="Step1Box" CornerRadius="16" Padding="12,5" Background="#EAF0FF"><TextBlock x:Name="Step1Text" Text="1  换驱动" Foreground="#2C6BED" FontWeight="SemiBold"/></Border>
      <TextBlock Text="→" Foreground="#AEB9CC" Margin="10,0,10,0" VerticalAlignment="Center"/>
      <Border x:Name="Step2Box" CornerRadius="16" Padding="12,5" Background="#F0F2F6"><TextBlock x:Name="Step2Text" Text="2  开启接收" Foreground="#95A1B5" FontWeight="SemiBold"/></Border>
@@ -15,22 +16,22 @@
     </StackPanel>
 
     <TextBlock x:Name="GuideStepLabel" Text="正在检查…" FontSize="13" Foreground="#2C6BED" FontWeight="SemiBold" Margin="0,0,0,6"/>
-    <TextBlock x:Name="GuideTitle" Text="正在检查设备与驱动…" FontSize="25" FontWeight="SemiBold" Foreground="#17233C" TextWrapping="Wrap"/>
-    <TextBlock x:Name="GuideDetail" Text="" FontSize="14" Foreground="#52627C" TextWrapping="Wrap" Margin="0,8,0,20" LineHeight="22"/>
+    <TextBlock x:Name="GuideTitle" Text="正在检查设备与驱动…" FontSize="24" FontWeight="SemiBold" Foreground="#17233C" TextWrapping="Wrap"/>
+    <TextBlock x:Name="GuideDetail" Text="" FontSize="14" Foreground="#52627C" TextWrapping="Wrap" Margin="0,8,0,18" LineHeight="21"/>
 
-    <Button x:Name="GuideAction" Content="检查接收条件" HorizontalAlignment="Left" Padding="26,12" FontSize="15" FontWeight="SemiBold" Foreground="White" Background="#2C6BED" BorderBrush="#2C6BED" Click="GuideAction_Click"/>
+    <Button x:Name="GuideAction" Content="检查接收条件" HorizontalAlignment="Left" Padding="26,11" FontSize="15" FontWeight="SemiBold" Foreground="White" Background="#2C6BED" BorderBrush="#2C6BED" Focusable="False" Click="GuideAction_Click"/>
 
-    <!-- Live transfer line: only occupies space while something is actually arriving. -->
-    <Border x:Name="ProgressPanel" CornerRadius="10" Background="#EEF3FF" Padding="14,10" Margin="0,16,0,0" Visibility="Collapsed">
+    <!-- Live transfer line: only occupies space while something is arriving. -->
+    <Border x:Name="ProgressPanel" CornerRadius="10" Background="#EEF3FF" Padding="14,10" Margin="0,14,0,0" Visibility="Collapsed">
      <TextBlock x:Name="ProgressText" FontSize="13" Foreground="#2C6BED" TextWrapping="Wrap"/>
     </Border>
 
-    <TextBox x:Name="ReceiveStatus" Text="" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="#F7F9FC" Foreground="#7C889C" FontSize="12" Padding="10" Margin="0,16,0,0" MaxHeight="140" VerticalScrollBarVisibility="Auto" Visibility="Collapsed"/>
+    <TextBox x:Name="ReceiveStatus" Text="" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="#F7F9FC" Foreground="#7C889C" FontSize="12" Padding="10" Margin="0,14,0,0" Height="150" VerticalScrollBarVisibility="Auto" Visibility="Collapsed"/>
 
-    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
-     <Button Content="详细检查报告" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#8B97AC" Cursor="Hand" Click="ToggleDetails_Click"/>
+    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+     <Button Content="详细信息" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#8B97AC" Cursor="Hand" Focusable="False" Click="ToggleDetails_Click"/>
      <TextBlock Text="·" Foreground="#C3CBD9" Margin="10,0" VerticalAlignment="Center"/>
-     <Button Content="回退驱动" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#B23A48" Cursor="Hand" Click="Rollback_Click"/>
+     <Button Content="回退驱动" Padding="0" FontSize="12" Background="Transparent" BorderThickness="0" Foreground="#B23A48" Cursor="Hand" Focusable="False" Click="Rollback_Click"/>
     </StackPanel>
    </StackPanel>
   </Border>

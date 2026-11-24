@@ -24,7 +24,7 @@ public partial class MainWindow : Window
         ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
         bool authorized, bool recoveryVerified,
         string python, string engineScript, string outputDirectory, string keysDirectory, string deviceName,
-        UsbDeviceSnapshot? selectedTarget = null)
+        UsbDeviceSnapshot? selectedTarget = null, bool allowLegacy = false)
     {
         if (session is not null) throw new InvalidOperationException("接收会话已经启动。");
         var created = new ReceiverSession();
@@ -34,7 +34,7 @@ public partial class MainWindow : Window
         try
         {
             await created.StartAsync(files, devices, selectedInstance, authorized, recoveryVerified,
-                python, engineScript, outputDirectory, keysDirectory, deviceName, selectedTarget);
+                python, engineScript, outputDirectory, keysDirectory, deviceName, selectedTarget, allowLegacy);
         }
         catch
         {
@@ -98,8 +98,9 @@ public partial class MainWindow : Window
             var inventory = string.IsNullOrWhiteSpace(radioExe)
                 ? new DeviceInventory.Result([], "未配置后端程序路径")
                 : await Task.Run(() => DeviceInventory.Read(radioExe));
-            var (pnp, target) = PickTarget(devices, inventory);
+            var (pnp, target, legacy) = PickTarget(devices, inventory);
             bool hasTarget = target is not null && BackendChain.ValidatedTargetSelection(target);
+            hasTarget |= legacy && pnp is not null;
             int readyCards = devices.Count(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)
                 && string.Equals(d.Service, "WinUSB", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase));
@@ -111,7 +112,7 @@ public partial class MainWindow : Window
 
             var report = ReadinessReport.Build(new ReadinessReport.Input(
                 devices, pnp?.InstanceId ?? "", files, authorized, recovery));
-            if (pnp is not null && target is null)
+            if (pnp is not null && target is null && !legacy)
                 report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口映射到 libusb 设备（可拔插后重扫）。";
             ReceiveStatus.Text = report;
         }
@@ -200,14 +201,14 @@ public partial class MainWindow : Window
     // BackendChain, whose ValidatedTargetSelection() safety lock stays closed.
     private async void StartReceive_Click(object sender, RoutedEventArgs e)
     {
-        ShowDetails("正在启动接收链路…");
+        ShowDetails("正在启动…");
         try
         {
             var devices = await QueryRadioDevicesAsync();
-            var target = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
-            var (pnp, selectedTarget) = PickTarget(devices, target);
-            if (pnp is null || selectedTarget is null)
-                throw new InvalidOperationException("无法定位目标网卡：需要至少一块 0BDA:C811 已绑定 WinUSB 且能被 libusb 按 USB 端口识别。请点上方主按钮“一键换 WinUSB”完成换驱动，然后重新检查。");
+            var inventory = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
+            var (pnp, selectedTarget, legacy) = PickTarget(devices, inventory);
+            if (pnp is null)
+                throw new InvalidOperationException("还没定位到网卡，先完成第 1 步换驱动。");
             var files = new ChainFiles(
                 Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_BRIDGE_EXE") ?? "",
@@ -220,102 +221,122 @@ public partial class MainWindow : Window
                 Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_KEYS_DIR") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_DEVICE_NAME") ?? "DropLink",
-                selectedTarget);
+                selectedTarget, legacy);
             await CheckReadinessAsync(); // advance the guide to "receiving" (step 3)
         }
         catch (Exception ex) { ShowDetails("启动失败：" + ex.Message); }
     }
 
-    // Driver rollback changes the system binding, so it is never implicit.
-    // It requires an explicit in-app confirmation, then launches the backed-up
-    // rollback script elevated (UAC). The script itself asks for "RESTORE".
-    private void Rollback_Click(object sender, RoutedEventArgs e)
+    // Driver rollback goes through the same confirmed, elevated, self-refreshing
+    // path as the switch; the difference is only which script it runs.
+    private void Rollback_Click(object sender, RoutedEventArgs e) => SwitchDriver(switchToWinUsb: false);
+
+    private void Setup_Click(object sender, RoutedEventArgs e) => SwitchDriver(switchToWinUsb: true);
+
+    // Both driver actions run the same external script and then refresh the
+    // guide by themselves, so the user never has to press "check" afterwards.
+    private async void SwitchDriver(bool switchToWinUsb)
     {
-        var script = Environment.GetEnvironmentVariable("DROPLINK_ROLLBACK_CMD") ?? "";
+        var variable = switchToWinUsb ? "DROPLINK_SETUP_CMD" : "DROPLINK_ROLLBACK_CMD";
+        var script = Environment.GetEnvironmentVariable(variable) ?? "";
         if (string.IsNullOrWhiteSpace(script) || !File.Exists(script))
         {
-            MessageBox.Show(this,
-                "未找到回退脚本。请通过“启动软件.cmd”启动本程序（它会设置脚本路径），" +
-                "或确认备份仍在 work\\_backup\\droplink-driver-20261124\\回退驱动.cmd。",
-                "无法回退", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, switchToWinUsb ? "未找到换驱动脚本。" : "未找到回退脚本。",
+                "无法继续", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        var answer = MessageBox.Show(this,
-            "恢复网卡为原厂 Realtek 驱动。\n\n" +
-            "接下来会弹管理员授权，请点“是”；\n" +
-            "然后在新窗口输入 RESTORE 回车。\n\n确定继续？",
-            "回退驱动", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-        if (answer != MessageBoxResult.Yes) return;
+        var question = switchToWinUsb
+            ? "把网卡切换到 WinUSB（接收隔空投送必需，一次性）。\n\n全自动，大约 10~60 秒，中途不用管。\n随时可以用「回退驱动」还原。\n\n继续？"
+            : "把网卡恢复成原厂驱动。\n\n全自动，大约 10~30 秒。\n\n继续？";
+        if (MessageBox.Show(this, question, switchToWinUsb ? "一键换 WinUSB" : "回退驱动",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
         try
         {
-            var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = true, Verb = "runas" };
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add($"\"{script}\"");
-            Process.Start(psi);
-            ShowDetails("已请求管理员权限。请在弹出的黑色窗口点“是”，再输入 RESTORE 回车。");
+            // Run the script directly (no cmd.exe hop) and capture its output.
+            // If the app somehow lost elevation, the script says so on stdout
+            // instead of failing silently.
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(script) ?? Environment.CurrentDirectory
+            };
+            foreach (var arg in new[]
+                     {
+                         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Force"
+                     })
+                psi.ArgumentList.Add(arg);
+
+            ShowDetails(switchToWinUsb
+                ? "正在切换驱动，请稍等（最多 1 分钟，完成后会自动刷新）…"
+                : "正在恢复驱动，请稍等（完成后会自动刷新）…");
+            GuideAction.IsEnabled = false;
+
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException("无法启动脚本。");
+            var stdout = await process.StandardOutput.ReadToEndAsync();
+            var stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            GuideAction.IsEnabled = true;
+            await CheckReadinessAsync();
+            if (currentStep == GuideStep.SwitchDriver || switchToWinUsb == false)
+            {
+                var detail = new System.Text.StringBuilder();
+                detail.AppendLine($"驱动操作没有成功（退出码 {process.ExitCode}）。");
+                if (!string.IsNullOrWhiteSpace(stdout)) detail.AppendLine().AppendLine(stdout.Trim());
+                if (!string.IsNullOrWhiteSpace(stderr)) detail.AppendLine().AppendLine(stderr.Trim());
+                detail.AppendLine().AppendLine(ReadLogTail(Path.Combine(Path.GetDirectoryName(script) ?? "", "setup.log")));
+                ShowDetails(detail.ToString().Trim());
+            }
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this,
-                "无法启动回退脚本：" + ex.Message +
-                "\n\n请手动右键运行：work\\_backup\\droplink-driver-20261124\\回退驱动.cmd，选“以管理员身份运行”。",
+            MessageBox.Show(this, "启动失败：" + ex.Message + "\n\n请右键以管理员身份运行：\n" + script,
                 "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    // One-time driver setup changes the system binding, so it is never implicit.
-    // Confirm, then launch the backed-up switch script elevated (UAC). The
-    // script itself imports the signing certificate and asks for "SWITCH".
-    private void Setup_Click(object sender, RoutedEventArgs e)
+    // The switch script logs every stage; surfacing the tail here means a
+    // failed step shows the reason inside the app instead of in a log file
+    // nobody opens.
+    private static string ReadLogTail(string path, int lines = 12)
     {
-        var script = Environment.GetEnvironmentVariable("DROPLINK_SETUP_CMD") ?? "";
-        if (string.IsNullOrWhiteSpace(script) || !File.Exists(script))
-        {
-            MessageBox.Show(this,
-                "未找到换驱动脚本。请通过“启动软件.cmd”启动本程序（它会设置脚本路径），" +
-                "或确认备份仍在 work\\_backup\\droplink-driver-20261124\\一键换WinUSB.cmd。",
-                "无法继续", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        var answer = MessageBox.Show(this,
-            "切换网卡到 WinUSB（接收 AirDrop 必需，一次性）。\n\n" +
-            "接下来会弹管理员授权，请点“是”；\n" +
-            "然后在新窗口输入 SWITCH 回车。\n\n" +
-            "随时可点红色“回退驱动”还原。确定继续？",
-            "一键换 WinUSB", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-        if (answer != MessageBoxResult.Yes) return;
         try
         {
-            var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = true, Verb = "runas" };
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add($"\"{script}\"");
-            var proc = Process.Start(psi);
-            ShowDetails("已请求管理员权限。请在弹出的黑色窗口点“是”，再输入 SWITCH 回车。\n\n" +
-                "如果没弹出窗口，说明系统的安全软件拦截了提权——请手动右键脚本“以管理员身份运行”。");
-            _ = proc;
+            if (!File.Exists(path)) return "（没有生成日志，脚本可能没能启动）";
+            var all = File.ReadAllLines(path);
+            return string.Join("\n", all.Skip(Math.Max(0, all.Length - lines)));
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this,
-                "无法启动换驱动脚本：" + ex.Message +
-                "\n\n请手动右键运行：work\\_backup\\droplink-driver-20261124\\一键换WinUSB.cmd，选“以管理员身份运行”。",
-                "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        catch (Exception ex) { return "（日志读取失败：" + ex.Message + "）"; }
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity)
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
     }
 
     // Pick a usable radio: any supported, healthy card bound to WinUSB is a
     // legitimate drive target. Two identical C811 cards are fine because each
     // PnP port pins a concrete libusb device, and radio opens strictly by
     // bus + dotted port path. All inputs are read-only snapshots.
-    private static (RadioDevice? Device, UsbDeviceSnapshot? Target) PickTarget(
+    private static (RadioDevice? Device, UsbDeviceSnapshot? Target, bool Legacy) PickTarget(
         IReadOnlyList<RadioDevice> devices, DeviceInventory.Result inventory)
     {
         var ready = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)
             && string.Equals(d.Service, "WinUSB", StringComparison.OrdinalIgnoreCase)
             && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase))
             .OrderBy(d => d.LocationInfo, StringComparer.OrdinalIgnoreCase).ToArray();
-        if (ready.Length == 0) return (null, null);
-        if (inventory.Error is not null) return (ready[0], null);
+        if (ready.Length == 0) return (null, null, false);
+        // The bundled backend predates --list-devices, so there is no libusb
+        // inventory to map. Preflight already guarantees exactly one supported
+        // card, so a VID/PID open can still only reach that card.
+        if (inventory.Error is not null)
+            return ready.Length == 1 ? (ready[0], null, true) : (ready[0], null, false);
 
         // Require instance-level uniqueness: the PnP port must match exactly
         // one supported libusb device before we claim a concrete target.
@@ -324,11 +345,11 @@ public partial class MainWindow : Window
             if (!UsbTopology.TryParseLocation(pnp.LocationInfo, out var port, out _)) continue;
             var match = inventory.Devices.Where(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)
                 && UsbTopology.TryLastPort(d.PortPath, out var last) && last == port).ToArray();
-            if (match.Length == 1) return (pnp, match[0]);
+            if (match.Length == 1) return (pnp, match[0], false);
         }
         // A WinUSB card exists but cannot be pinned to libusb: keep the button
         // disabled while surfacing the card in the readiness diagnostic.
-        return (ready[0], null);
+        return (ready[0], null, false);
     }
 
     private static bool EnvFlag(string name) =>

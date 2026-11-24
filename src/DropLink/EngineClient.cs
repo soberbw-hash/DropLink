@@ -45,9 +45,18 @@ internal sealed class EngineClient : IAsyncDisposable
             StandardErrorEncoding = Encoding.UTF8,
             WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(engine))!
         };
-        foreach (string arg in new[] { "-u", Path.GetFullPath(engine), "--proxy-address-file", Path.GetFullPath(addressFile),
-                    "--outdir", Path.GetFullPath(outputDirectory), "--keys", Path.GetFullPath(keysDirectory), "--name", deviceName })
-            info.ArgumentList.Add(arg);
+        var arguments = new List<string> { "-u", Path.GetFullPath(engine) };
+        // Proxy mode (engine talks to awdl_netd over loopback) is used when the
+        // chain produced an address file. Bundled backends that create the awdl0
+        // adapter themselves need the engine to bind that adapter directly.
+        if (!string.IsNullOrWhiteSpace(addressFile))
+        {
+            arguments.Add("--proxy-address-file");
+            arguments.Add(Path.GetFullPath(addressFile));
+        }
+        foreach (string arg in new[] { "--outdir", Path.GetFullPath(outputDirectory), "--keys", Path.GetFullPath(keysDirectory), "--name", deviceName })
+            arguments.Add(arg);
+        foreach (var argument in arguments) info.ArgumentList.Add(argument);
         var child = Process.Start(info) ?? throw new InvalidOperationException("Could not start receiver engine.");
         return new EngineClient(child, eventReceived, exited);
     }
