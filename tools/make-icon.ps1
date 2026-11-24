@@ -1,115 +1,97 @@
-# Builds src/DropLink/app.ico from vector drawing primitives.
-# Pure ASCII, Windows PowerShell 5.1 safe. Multi-size PNG-compressed ICO.
+# Builds src/DropLink/app.ico from tools/icon-source.png.
+# Pure ASCII, Windows PowerShell 5.1 safe. Multi-size, PNG-compressed ICO.
+#
+# The icon is an asset, not something drawn at build time: the design lives in
+# tools/icon-source.png and this script only rasterises it to the sizes Windows
+# actually asks for. make-icon-legacy.ps1 holds the previous vector version for
+# reference; nothing calls it.
 param(
+    [string]$Source = '',
     [string]$Out = '',
+    [int[]]$Sizes = @(16, 20, 24, 32, 40, 48, 64, 128, 256),
     [switch]$Preview
 )
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $Source = Join-Path $PSScriptRoot 'icon-source.png'
+}
+if (-not (Test-Path -LiteralPath $Source)) { throw ('icon source is missing: ' + $Source) }
 if ([string]::IsNullOrWhiteSpace($Out)) {
     $Out = Join-Path (Split-Path -Parent $PSScriptRoot) 'src\DropLink\app.ico'
 }
 
-function New-TileBitmap([int]$size) {
-    $bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $g.Clear([System.Drawing.Color]::Transparent)
-
-    # Rounded square background with a blue-to-cyan diagonal gradient.
-    $pad = [float][math]::Max(0.5, $size * 0.03)
-    $rect = New-Object System.Drawing.RectangleF($pad, $pad, [float]($size - 2 * $pad), [float]($size - 2 * $pad))
-    $d = [float]($size * 0.46)
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc($rect.X, $rect.Y, $d, $d, 180, 90)
-    $path.AddArc([float]($rect.Right - $d), $rect.Y, $d, $d, 270, 90)
-    $path.AddArc([float]($rect.Right - $d), [float]($rect.Bottom - $d), $d, $d, 0, 90)
-    $path.AddArc($rect.X, [float]($rect.Bottom - $d), $d, $d, 90, 90)
-    $path.CloseFigure()
-
-    $c1 = [System.Drawing.Color]::FromArgb(255, 43, 92, 255)
-    $c2 = [System.Drawing.Color]::FromArgb(255, 22, 198, 255)
-    $grad = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, $c1, $c2, 50.0)
-    $g.FillPath($grad, $path)
-
-    # White incoming-transfer arrow: shaft, head, and a landing line.
-    $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $cx = [float]($size / 2.0)
-    $shaftW = [float]($size * 0.155)
-    $headW = [float]($size * 0.46)
-    $top = [float]($size * 0.20)
-    $tipY = [float]($size * 0.585)
-
-    $pts = New-Object 'System.Drawing.PointF[]' 7
-    $pts[0] = New-Object System.Drawing.PointF([float]($cx - $shaftW / 2), $top)
-    $pts[1] = New-Object System.Drawing.PointF([float]($cx + $shaftW / 2), $top)
-    $pts[2] = New-Object System.Drawing.PointF([float]($cx + $shaftW / 2), [float]($tipY - $headW / 2))
-    $pts[3] = New-Object System.Drawing.PointF([float]($cx + $headW / 2), [float]($tipY - $headW / 2))
-    $pts[4] = New-Object System.Drawing.PointF($cx, $tipY)
-    $pts[5] = New-Object System.Drawing.PointF([float]($cx - $headW / 2), [float]($tipY - $headW / 2))
-    $pts[6] = New-Object System.Drawing.PointF([float]($cx - $shaftW / 2), [float]($tipY - $headW / 2))
-    $arrow = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $arrow.AddPolygon($pts)
-    $g.FillPath($white, $arrow)
-
-    # Landing line.
-    $lineH = [float][math]::Max(1.4, $size * 0.072)
-    $lineY = [float]($size * 0.745)
-    $lineW = [float]($headW * 0.92)
-    $lineRect = New-Object System.Drawing.RectangleF([float]($cx - $lineW / 2), $lineY, $lineW, $lineH)
-    $g.FillRectangle($white, $lineRect)
-
-    $g.Dispose()
-    return $bmp
-}
-
-$sizes = @(16, 24, 32, 48, 64, 128, 256)
-$payloads = New-Object 'System.Collections.Generic.List[byte[]]'
-
-foreach ($s in $sizes) {
-    $bmp = New-TileBitmap $s
-    $ms = New-Object System.IO.MemoryStream
-    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $payloads.Add($ms.ToArray())
-    if ($Preview -and $s -eq 256) {
-        $previewPath = [System.IO.Path]::ChangeExtension($Out, '.png')
-        $bmp.Save($previewPath, [System.Drawing.Imaging.ImageFormat]::Png)
-        Write-Output ('preview=' + $previewPath)
+$src = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $Source).Path)
+$frames = New-Object System.Collections.ArrayList
+try {
+    foreach ($size in $Sizes) {
+        $bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        # SourceCopy keeps the alpha channel instead of blending it onto the
+        # default black canvas, which is what made earlier conversions come out
+        # with dark fringes around the arcs.
+        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $g.Clear([System.Drawing.Color]::Transparent)
+        $g.DrawImage($src, 0, 0, $size, $size)
+        $g.Dispose()
+        $buffer = New-Object System.IO.MemoryStream
+        $bmp.Save($buffer, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+        [void]$frames.Add([pscustomobject]@{ Size = $size; Data = $buffer.ToArray() })
+        $buffer.Dispose()
     }
-    $ms.Dispose()
-    $bmp.Dispose()
+} finally {
+    $src.Dispose()
 }
 
-$dir = Split-Path -Parent $Out
-if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+if ($frames.Count -eq 0) { throw 'no icon frames were produced' }
 
-$fs = [System.IO.File]::Create($Out)
-$bw = New-Object System.IO.BinaryWriter($fs)
-$bw.Write([uint16]0)               # reserved
-$bw.Write([uint16]1)               # type: icon
-$bw.Write([uint16]$sizes.Count)
-
-$offset = 6 + 16 * $sizes.Count
-for ($i = 0; $i -lt $sizes.Count; $i++) {
-    $s = $sizes[$i]
-    $dim = if ($s -ge 256) { [byte]0 } else { [byte]$s }
-    $bw.Write($dim)                # width
-    $bw.Write($dim)                # height
-    $bw.Write([byte]0)             # palette
-    $bw.Write([byte]0)             # reserved
-    $bw.Write([uint16]1)           # planes
-    $bw.Write([uint16]32)          # bits per pixel
-    $bw.Write([uint32]$payloads[$i].Length)
-    $bw.Write([uint32]$offset)
-    $offset += $payloads[$i].Length
+$imageOffset = 6 + 16 * $frames.Count
+$stream = New-Object System.IO.MemoryStream
+$writer = New-Object System.IO.BinaryWriter($stream)
+try {
+    # ICONDIR
+    $writer.Write([UInt16]0)
+    $writer.Write([UInt16]1)
+    $writer.Write([UInt16]$frames.Count)
+    # ICONDIRENTRY per frame; 256 is encoded as 0.
+    foreach ($frame in $frames) {
+        $dim = if ($frame.Size -ge 256) { 0 } else { $frame.Size }
+        $writer.Write([byte]$dim)
+        $writer.Write([byte]$dim)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([UInt16]1)
+        $writer.Write([UInt16]32)
+        $writer.Write([UInt32]$frame.Data.Length)
+        $writer.Write([UInt32]$imageOffset)
+        $imageOffset += $frame.Data.Length
+    }
+    foreach ($frame in $frames) { $writer.Write([byte[]]$frame.Data) }
+    $writer.Flush()
+    [System.IO.File]::WriteAllBytes($Out, $stream.ToArray())
+} finally {
+    $writer.Dispose()
+    $stream.Dispose()
 }
-foreach ($p in $payloads) { $bw.Write($p) }
-$bw.Flush()
-$bw.Dispose()
-$fs.Dispose()
 
 $info = Get-Item -LiteralPath $Out
-Write-Output ('OK ' + $Out + ' ' + $info.Length + ' bytes ' + $sizes.Count + ' sizes')
+Write-Output ('OK ' + $info.FullName)
+Write-Output ('bytes=' + $info.Length)
+Write-Output ('frames=' + (($frames | ForEach-Object { $_.Size }) -join ','))
+
+if ($Preview) {
+    $dir = Join-Path $env:TEMP 'droplink-icon-preview'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    foreach ($frame in $frames) {
+        $path = Join-Path $dir ('icon-' + $frame.Size + '.png')
+        [System.IO.File]::WriteAllBytes($path, $frame.Data)
+    }
+    Write-Output ('preview=' + $dir)
+}

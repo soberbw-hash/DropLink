@@ -7,6 +7,11 @@ import sys
 
 BINARIES = [
     'app/DropLink.exe',
+    # Published next to the exe by tools/publish.ps1. The .ico is what a
+    # shortcut needs, and the PNG is the design file; losing either means the
+    # icon can only be recovered from version control.
+    'app/DropLink.ico',
+    'app/icon-source.png',
     'backend/airbridge_radio.exe',
     'backend/radio_pipe_bridge.exe',
     'backend/awdl_netd.exe',
