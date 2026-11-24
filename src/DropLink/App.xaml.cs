@@ -7,6 +7,9 @@ namespace DropLink;
 public partial class App : System.Windows.Application
 {
     private SingleInstance? singleInstance;
+    // True only for the process that actually owns the receiver chain, so a
+    // second launch that immediately shuts down never kills the live backends.
+    private bool ownsChain;
 
     internal static bool StartMinimized { get; private set; }
 
@@ -58,6 +61,16 @@ public partial class App : System.Windows.Application
             Shutdown();
             return;
         }
+        // We are the only receiver in this session, so any backend still running
+        // is a leftover from a run that never cleaned up. It would hold the radio
+        // and the stop event and make every start fail.
+        ownsChain = true;
+        try
+        {
+            var killed = BackendChain.KillStaleChain();
+            if (killed > 0) AppLog.Write($"cleaned {killed} stale backend process(es) from a previous run");
+        }
+        catch (Exception error) { AppLog.Write("stale chain cleanup failed: " + error.Message); }
 
         // Last-resort crash guard: never die silently. async void handlers in
         // WPF can throw outside try/catch; show the reason instead of vanishing.
@@ -94,6 +107,12 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Logoff/shutdown does not go through the tray exit path, so the chain
+        // would otherwise be orphaned and block the next launch.
+        if (ownsChain)
+        {
+            try { BackendChain.KillStaleChain(); } catch (Exception) { /* best-effort */ }
+        }
         singleInstance?.Dispose();
         base.OnExit(e);
     }

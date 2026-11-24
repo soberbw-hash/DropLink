@@ -42,8 +42,16 @@ internal sealed class BackendChain : IAsyncDisposable
             bool strict = ValidatedTargetSelection(selectedTarget);
             if (!strict && !(allowLegacySingleDevice && selectedTarget is null))
                 throw new NotSupportedException("无法唯一定位无线网卡；接收已禁用。");
-            radioStop = new EventWaitHandle(false, EventResetMode.ManualReset, @"Local\DropBridgeRadioStop", out bool created);
-            if (!created) throw new InvalidOperationException("另一接收链路正在运行或停止事件已存在。");
+            radioStop = TryCreateStopEvent();
+            if (radioStop is null)
+            {
+                // A previous run left its chain behind (window closed to tray,
+                // logoff, or a killed host). Clear it and try once more.
+                KillStaleChain();
+                await Task.Delay(500, cancel).ConfigureAwait(false);
+                radioStop = TryCreateStopEvent();
+            }
+            if (radioStop is null) throw new InvalidOperationException("另一接收链路正在运行或停止事件已存在。");
             sessionDirectory = Path.Combine(Path.GetTempPath(), "DropLink-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(sessionDirectory);
             // The radio spends ~45 s on firmware + BB/RF init before it serves
@@ -115,6 +123,17 @@ internal sealed class BackendChain : IAsyncDisposable
             throw;
         }
         finally { lifecycle.Release(); }
+    }
+
+    // Returns null when another owner already holds the name, so the caller can
+    // decide to clean up and retry instead of failing on a leftover handle.
+    private static EventWaitHandle? TryCreateStopEvent()
+    {
+        var handle = new EventWaitHandle(false, EventResetMode.ManualReset,
+            @"Local\DropBridgeRadioStop", out bool created);
+        if (created) return handle;
+        handle.Dispose();
+        return null;
     }
 
     // Port probe used as an independent readiness signal for the radio stage.
@@ -220,6 +239,57 @@ internal sealed class BackendChain : IAsyncDisposable
         }
         await readySignal.Task.ConfigureAwait(false);
         if (child.HasExited) throw new InvalidOperationException("后端就绪后立即退出。");
+    }
+
+    // The four backends outlive their parent if the host is killed, logged off or
+    // shut down without disposing the session. They keep holding the radio, the
+    // \\.\pipe\winawdl-radio pipe and the inherited DropBridgeRadioStop event, so
+    // every later start fails with "another chain is already running". Nothing
+    // else can clean them up: they run elevated, so only the (elevated) app can.
+    internal static int KillStaleChain()
+    {
+        var killed = 0;
+        // Reverse start order so the radio is last.
+        foreach (var name in new[] { "awdld", "awdl_netd", "radio_pipe_bridge", "airbridge_radio" })
+        {
+            Process[] found;
+            try { found = Process.GetProcessesByName(name); }
+            catch (Exception) { continue; }
+            foreach (var process in found)
+            {
+                try
+                {
+                    process.Kill(true);
+                    process.WaitForExit(3000);
+                    killed++;
+                }
+                catch (Exception) { /* already gone or access denied */ }
+                finally { process.Dispose(); }
+            }
+        }
+        // The receiver engine is the bundled interpreter, never the system one:
+        // match on the exact executable path so a user's own python is safe.
+        var bundledPython = Environment.GetEnvironmentVariable("DROPLINK_PYTHON");
+        if (!string.IsNullOrWhiteSpace(bundledPython))
+        {
+            Process[] pythons;
+            try { pythons = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(bundledPython)); }
+            catch (Exception) { pythons = []; }
+            foreach (var process in pythons)
+            {
+                try
+                {
+                    if (!string.Equals(process.MainModule?.FileName, bundledPython, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    process.Kill(true);
+                    process.WaitForExit(3000);
+                    killed++;
+                }
+                catch (Exception) { /* already gone or access denied */ }
+                finally { process.Dispose(); }
+            }
+        }
+        return killed;
     }
 
     internal async Task StopAsync()

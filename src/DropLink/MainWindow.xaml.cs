@@ -302,6 +302,13 @@ public partial class MainWindow : Window
         ProgressPanel.Visibility = Visibility.Visible;
     }
 
+    private void ClearProgress()
+    {
+        transientProgress = false;
+        ProgressText.Text = "";
+        ProgressPanel.Visibility = Visibility.Collapsed;
+    }
+
     // Details stay collapsed unless the caller has to explain a failure.
     private void ShowDetails(string message, bool expand = false)
     {
@@ -350,7 +357,14 @@ public partial class MainWindow : Window
             // process was actually running.
             await CloseSessionAsync();
             var reason = "启动失败：" + ex.Message;
+            AppLog.Write("start failed: " + ex.Message);
             await CheckReadinessAsync(); // back to step 2 so the button works again
+            // Leaving "正在初始化网卡…" on screen after a failure is what makes a
+            // failed start look like a hang. Replace it with the real reason.
+            ClearProgress();
+            GuideStepLabel.Text = "启动失败";
+            GuideTitle.Text = "接收没有启动起来";
+            GuideDetail.Text = ex.Message;
             ShowDetails(reason, expand: true); // keep the reason visible after the refresh
             // A hidden receiver must not open a modal box at logon; the tray is
             // the only thing the user can see, so report it there.
