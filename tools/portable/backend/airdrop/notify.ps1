@@ -9,7 +9,10 @@ param(
     [string]$OpenLabelB64 = '~',
     [string]$ClipLabelB64 = '~',
     [string]$ImageB64 = '~',
-    [string]$SelectB64 = '~'
+    [string]$SelectB64 = '~',
+    # A failure notice has nothing to open and nothing to copy. Two blank
+    # buttons would be worse than none.
+    [switch]$NoActions
 )
 $ErrorActionPreference = 'Stop'
 
@@ -178,13 +181,22 @@ try {
             $binding.AppendChild($img) | Out-Null
         } catch { }
     }
-    $acts = $doc.GetElementsByTagName('action')
-    $acts.Item(0).SetAttribute('content', $openLbl)
-    $acts.Item(0).SetAttribute('activationType', 'protocol')
-    $acts.Item(0).SetAttribute('arguments', $openUri)
-    $acts.Item(1).SetAttribute('content', $clipLbl)
-    $acts.Item(1).SetAttribute('activationType', 'protocol')
-    $acts.Item(1).SetAttribute('arguments', $clipUri)
+    if ($NoActions) {
+        # Remove the whole <actions> element: an empty one renders as two blank
+        # buttons, and a button that does nothing is worse than no button.
+        $actsNode = $doc.GetElementsByTagName('actions')
+        if ($actsNode.Length -gt 0) {
+            $actsNode.Item(0).ParentNode.RemoveChild($actsNode.Item(0)) | Out-Null
+        }
+    } else {
+        $acts = $doc.GetElementsByTagName('action')
+        $acts.Item(0).SetAttribute('content', $openLbl)
+        $acts.Item(0).SetAttribute('activationType', 'protocol')
+        $acts.Item(0).SetAttribute('arguments', $openUri)
+        $acts.Item(1).SetAttribute('content', $clipLbl)
+        $acts.Item(1).SetAttribute('activationType', 'protocol')
+        $acts.Item(1).SetAttribute('arguments', $clipUri)
+    }
 
     $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
     try {

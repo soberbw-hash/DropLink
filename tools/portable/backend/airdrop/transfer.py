@@ -22,7 +22,15 @@ KIB = 1024
 MIB = 1024 * KIB
 GIB = 1024 * MIB
 
-READ_IDLE_TIMEOUT_SECONDS = 30
+# How long a body may arrive with nothing at all before the upload is dropped.
+#
+# 30 s was too eager for AWDL. The log of 2026-11-25 01:47 has a real 27 MB
+# video that got to 6.08 MB and then went quiet for 30 s; the receiver answered
+# 408 and the phone showed nothing. Channel hopping on a link with two peers is
+# exactly the situation where a sender pauses for tens of seconds and then
+# carries on, and killing it turns a slow transfer into a failed one. The rate
+# floor below still catches a body that is alive but crawling.
+READ_IDLE_TIMEOUT_SECONDS = 90
 # How long to wait for the marker that ends a body once the archive in it is
 # complete. An iPhone sends none after a video or a Live Photo.
 END_MARKER_WAIT_SECONDS = 2

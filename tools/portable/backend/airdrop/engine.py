@@ -281,6 +281,42 @@ def notify_received(folder, names):
     threading.Thread(target=_run, name='toast', daemon=True).start()
 
 
+def notify_failed(reason):
+    """Say so when a transfer never finishes, in the user's words.
+
+    No buttons: there is nothing to open and nothing to copy. The technical
+    reason is kept, because "it stopped" with no reason is what made this look
+    like a mystery in the first place.
+    """
+    def _run():
+        try:
+            import base64
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'notify.ps1')
+            if not os.path.exists(script):
+                return
+            def b64(text):
+                return base64.b64encode(str(text).encode('utf-8')).decode('ascii') or '~'
+            detail = str(reason or '').strip()
+            if len(detail) > 160:
+                detail = detail[:157] + '…'
+            message = '手机那边中断了，可以在手机上重新点一次这台电脑。'
+            if detail:
+                message += '\n（原因：' + detail + '）'
+            args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', script,
+                    '-FolderB64', b64('~'),
+                    '-TitleB64', b64('这次没传完'),
+                    '-MessageB64', b64(message),
+                    '-NoActions']
+            creation = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            subprocess.run(args, timeout=20, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, check=False,
+                           creationflags=creation)
+        except Exception as error:
+            logging.warning('failure toast failed: %s', error)
+    threading.Thread(target=_run, name='toast-failed', daemon=True).start()
+
+
 def announced_files(ask):
     files = []
     for entry in ask.get('Files') or []:
@@ -405,6 +441,10 @@ class Incoming(receiver.Watcher):
 
     def upload_failed(self, token, reason):
         self.events.say('lost', id=token.key, reason=reason)
+        # The window is usually in the tray, and a failed upload used to leave
+        # nothing behind but a log line and a row in a list nobody was looking
+        # at. "It just stopped" was the whole story the user got.
+        notify_failed(reason)
 
 
 class Receiving:
@@ -427,6 +467,12 @@ class Receiving:
     def _say(self, on, reason=None):
         if (on, reason) != self._said:
             self._said = (on, reason)
+            # In the log too, not only on the IPC stream. A receiver that stops
+            # because the link went away leaves a user staring at a phone that
+            # "does nothing", and until now the only trace was an event the UI
+            # happened to be listening for.
+            logging.info('receiver %s%s', 'up' if on else 'down',
+                         '' if reason is None else f': {reason}')
             self.events.say('receiving', on=on, reason=reason, port=self.settings.port)
 
     def start(self, index, address):
@@ -765,6 +811,11 @@ class Engine:
         while not self.stopping.is_set():
             found = self._found()
             if found != current:
+                # The address file is what netd writes and what the phone is
+                # told; when it changes or disappears the receiver is torn down
+                # and every attempt from the phone hits a closed port with
+                # nothing in the log to say why.
+                logging.info('link %s', f'up at {found[1]}' if found else 'down')
                 with self._lock:
                     self.receiving.stop()
                     self.scope = found[0] if found else None
