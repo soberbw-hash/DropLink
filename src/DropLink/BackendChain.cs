@@ -219,7 +219,16 @@ internal sealed class BackendChain : IAsyncDisposable
             if (entry.Value is null) info.Environment.Remove(entry.Key); else info.Environment[entry.Key] = entry.Value;
         var readySignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var child = new Process { StartInfo = info, EnableRaisingEvents = true };
-        void Line(string? line) { if (line is not null && line.Contains(ready, StringComparison.Ordinal)) readySignal.TrySetResult(); }
+        var backendName = Path.GetFileNameWithoutExtension(path);
+        void Line(string? line)
+        {
+            if (line is null) return;
+            // Kept on disk, not just inspected: when awdld exits on start, the
+            // reason is on its own stderr, and that line is the difference
+            // between a fix and another round of guessing.
+            AppLog.WriteBackendOutput(backendName, line);
+            if (line.Contains(ready, StringComparison.Ordinal)) readySignal.TrySetResult();
+        }
         child.OutputDataReceived += (_, e) => Line(e.Data);
         child.ErrorDataReceived += (_, e) => Line(e.Data);
         child.Exited += (_, _) =>

@@ -33,6 +33,15 @@ internal static class AppLog
     /// <summary>Backend/engine stderr, kept out of the IPC stream and off the UI.</summary>
     public static void WriteEngineStderr(string line) => Append("engine-stderr.log", line);
 
+    /// <summary>
+    /// Raw output of one chain backend, one file per process. It used to be read
+    /// only to spot the readiness line and then discarded, which turned every
+    /// backend crash into "后端进程提前退出" with no reason attached - a guess
+    /// dressed up as a diagnosis.
+    /// </summary>
+    public static void WriteBackendOutput(string name, string line) =>
+        Append("backend-" + name + ".log", line);
+
     private static void Append(string fileName, string line)
     {
         try
