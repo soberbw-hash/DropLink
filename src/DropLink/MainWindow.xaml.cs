@@ -103,7 +103,7 @@ public partial class MainWindow : Window
             var target = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
             var (pnp, selectedTarget) = PickTarget(devices, target);
             if (pnp is null || selectedTarget is null)
-                throw new InvalidOperationException("无法唯一确定目标网卡。请确认仅一块网卡绑定 WinUSB，然后点“检查接收条件”重新扫描。");
+                throw new InvalidOperationException("无法定位目标网卡：需要至少一块 0BDA:C811 已绑定 WinUSB 且能被 libusb 按 USB 端口识别。请先运行“一键换WinUSB.cmd”换驱动，再点“检查接收条件”。");
             var files = new ChainFiles(
                 Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_BRIDGE_EXE") ?? "",
@@ -154,22 +154,32 @@ public partial class MainWindow : Window
         catch (Exception ex) { ReceiveStatus.Text = "无法启动回退脚本：" + ex.Message; }
     }
 
-    // Pick the single usable radio: among all supported cards, the one that is
-    // bound to WinUSB and healthy is the one we intend to drive. Its PnP port
-    // then identifies the exact libusb device, so two identical C811 cards no
-    // longer make selection ambiguous. All inputs are read-only snapshots.
+    // Pick a usable radio: any supported, healthy card bound to WinUSB is a
+    // legitimate drive target. Two identical C811 cards are fine because each
+    // PnP port pins a concrete libusb device, and radio opens strictly by
+    // bus + dotted port path. All inputs are read-only snapshots.
     private static (RadioDevice? Device, UsbDeviceSnapshot? Target) PickTarget(
         IReadOnlyList<RadioDevice> devices, DeviceInventory.Result inventory)
     {
         var ready = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)
             && string.Equals(d.Service, "WinUSB", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (ready.Length != 1 || inventory.Error is not null) return (null, null);
-        var pnp = ready[0];
-        if (!UsbTopology.TryParseLocation(pnp.LocationInfo, out var port, out _)) return (pnp, null);
-        var match = inventory.Devices.FirstOrDefault(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)
-            && UsbTopology.TryLastPort(d.PortPath, out var last) && last == port);
-        return (pnp, match);
+            && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(d => d.LocationInfo, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (ready.Length == 0) return (null, null);
+        if (inventory.Error is not null) return (ready[0], null);
+
+        // Require instance-level uniqueness: the PnP port must match exactly
+        // one supported libusb device before we claim a concrete target.
+        foreach (var pnp in ready)
+        {
+            if (!UsbTopology.TryParseLocation(pnp.LocationInfo, out var port, out _)) continue;
+            var match = inventory.Devices.Where(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)
+                && UsbTopology.TryLastPort(d.PortPath, out var last) && last == port).ToArray();
+            if (match.Length == 1) return (pnp, match[0]);
+        }
+        // A WinUSB card exists but cannot be pinned to libusb: keep the button
+        // disabled while surfacing the card in the readiness diagnostic.
+        return (ready[0], null);
     }
 
     private static bool EnvFlag(string name) =>
