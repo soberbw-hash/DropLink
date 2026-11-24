@@ -43,7 +43,7 @@ internal static class ReadinessReport
         if (check.Ready)
         {
             sb.AppendLine("  已满足开启接收的前置条件。");
-            sb.AppendLine("  出于安全策略仍不会自动启动；放行前还需真机拓扑验证与你的最终确认。");
+            sb.AppendLine("  点击“开启接收”会启动链路并初始化该网卡；不会自动启动。");
         }
         else
         {

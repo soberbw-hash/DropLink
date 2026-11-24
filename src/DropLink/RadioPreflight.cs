@@ -3,7 +3,7 @@ using System.IO;
 namespace DropLink;
 
 // Read-only decision logic. No driver, device or network operation is performed here.
-internal sealed record RadioDevice(string InstanceId, string HardwareId, string Service, string Status);
+internal sealed record RadioDevice(string InstanceId, string HardwareId, string Service, string Status, string LocationInfo = "");
 internal sealed record RadioPreflightResult(bool Ready, IReadOnlyList<string> Problems);
 
 internal static class RadioPreflight

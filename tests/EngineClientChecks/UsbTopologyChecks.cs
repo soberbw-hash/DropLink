@@ -71,8 +71,8 @@ internal static class UsbTopologyChecks
         var legacyEnv = BackendChain.BuildRadioEnvironment(null);
         Require(!legacyEnv.ContainsKey("AIRBRIDGE_USB_BUS") && !legacyEnv.ContainsKey("AIRBRIDGE_USB_PORT"),
             "no topology env without a resolved target");
-        Require(legacyEnv["AIRBRIDGE_VID"] == "0x0bda" && legacyEnv["AIRBRIDGE_PID"] == "0xc820",
-            "legacy VID/PID defaults");
+        Require(legacyEnv["AIRBRIDGE_VID"] == "0x0bda" && legacyEnv["AIRBRIDGE_PID"] == "0xc811",
+            "legacy VID/PID defaults (C811 is the adapter in use)");
         var strictEnv = BackendChain.BuildRadioEnvironment(new UsbDeviceSnapshot(3, "1.4.2", 0x0bda, 0xc820));
         Require(strictEnv["AIRBRIDGE_USB_BUS"] == "3" && strictEnv["AIRBRIDGE_USB_PORT"] == "1.4.2",
             "strict topology env from resolved target");
@@ -94,13 +94,39 @@ internal static class UsbTopologyChecks
         Require(cards.Length == 2, "two identical-VID/PID cards enumerated");
         // A PnP target on port 5 resolves to exactly the second card.
         var cardTarget = new PnpRadioTarget(
-            "USB\\VID_0BDA&PID_C811&MI_02\\inst", "USB\\VID_0BDA&PID_C811&MI_02",
+            "USB\\VID_0BDA&PID_C811\\123456", "USB\\VID_0BDA&PID_C811",
             "Port_#0005.Hub_#0001", "WinUSB", "OK");
         var picked = UsbTopology.Resolve(cardTarget, inventory.Devices);
         Require(picked.Selected && picked.Device == cards[1], "inventory feeds topology to pick correct card");
         Require(DeviceInventory.Parse("{}").Error is not null, "reject non-array inventory");
         Require(DeviceInventory.Parse("not json").Error is not null, "reject malformed inventory");
 
-        Console.WriteLine("PASS: PnP->libusb topology mapping, multi-card, re-enumeration, fail-closed, radio env mapping and read-only inventory checks");
+        // C811 is non-composite: a whole-device WinUSB binding has no MI suffix.
+        // A composite-style C811 should be rejected, while the plain C811 binds.
+        Require(UsbTopology.Resolve(new PnpRadioTarget(
+                    "USB\\VID_0BDA&PID_C811&MI_02\\inst", "USB\\VID_0BDA&PID_C811&MI_02",
+                    "Port_#0005.Hub_#0001", "WinUSB", "OK"), [cards[1]]).Selected == false,
+            "non-composite C811 with MI is rejected");
+        Require(UsbTopology.Resolve(cardTarget, [cards[0], cards[1]]).Selected
+                && UsbTopology.Resolve(cardTarget, [cards[0], cards[1]]).Device == cards[1],
+            "plain C811 whole-device target resolves to the correct port");
+
+        // Safety gate: opens only for a real, supported, physical target;
+        // fails closed for null, unsupported VID/PID, missing bus/port or junk.
+        Require(BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(1, "8", 0x0bda, 0xc811)),
+            "gate opens for real C811 target");
+        Require(BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(1, "4.2", 0x0bda, 0xc820)),
+            "gate opens for real C820 target");
+        Require(!BackendChain.ValidatedTargetSelection(null), "gate closed for null target");
+        Require(!BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(0, "8", 0x0bda, 0xc811)),
+            "gate closed for invalid bus");
+        Require(!BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(1, "", 0x0bda, 0xc811)),
+            "gate closed for missing port");
+        Require(!BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(1, "x.y", 0x0bda, 0xc811)),
+            "gate closed for malformed port");
+        Require(!BackendChain.ValidatedTargetSelection(new UsbDeviceSnapshot(1, "8", 0x1d6b, 0x0002)),
+            "gate closed for unsupported VID/PID");
+
+        Console.WriteLine("PASS: PnP->libusb topology mapping, multi-card, re-enumeration, fail-closed, C811 non-composite, safety gate and read-only inventory checks");
     }
 }

@@ -87,7 +87,7 @@ internal sealed class BackendChain : IAsyncDisposable
     internal static Dictionary<string, string?> BuildRadioEnvironment(UsbDeviceSnapshot? target)
     {
         var env = new Dictionary<string, string?> {
-            ["AIRBRIDGE_VID"] = "0x0bda", ["AIRBRIDGE_PID"] = "0xc820",
+            ["AIRBRIDGE_VID"] = "0x0bda", ["AIRBRIDGE_PID"] = "0xc811",
             ["AIRBRIDGE_LOG_LEVEL"] = "warn", ["AIRBRIDGE_LINK_STATS"] = "1",
             ["AIRBRIDGE_FASTRETUNE_FW"] = "2", ["AIRBRIDGE_PARENT_PID"] = Environment.ProcessId.ToString()
         };
@@ -101,9 +101,24 @@ internal sealed class BackendChain : IAsyncDisposable
         return env;
     }
 
-    // Safety lock. Stays false until precise PnP<->libusb binding and recovery
-    // are proven on real hardware; passing a target does not open it.
-    private static bool ValidatedTargetSelection(UsbDeviceSnapshot? target) => false;
+    // Safety gate — no longer an unconditional false. It opens ONLY for a
+    // target whose identity came from a REAL libusb enumeration (never
+    // fabricated) and passed PnP preflight upstream: supported VID/PID, a
+    // physical bus number, and a well-formed dotted port path. With no target,
+    // or a synthetic/unsupported one, it still fails closed. Note this does
+    // not itself bind a driver or open a device — that is the radio's job and
+    // is gated by RadioPreflight.Check (WinUSB, authorization, recovery).
+    internal static bool ValidatedTargetSelection(UsbDeviceSnapshot? target)
+    {
+        if (target is null) return false;
+        if (!RadioPreflight.IsSupportedUsbId(target.Vid, target.Pid)) return false;
+        if (target.Bus <= 0) return false;
+        var port = target.PortPath;
+        if (string.IsNullOrWhiteSpace(port)) return false;
+        foreach (var segment in port.Split('.'))
+            if (!int.TryParse(segment, out var n) || n < 0) return false;
+        return true;
+    }
 
     private async Task StartStage(string path, string[] args, Dictionary<string, string?> environment,
         string ready, TimeSpan timeout, CancellationToken cancel)

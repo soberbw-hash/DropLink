@@ -73,13 +73,20 @@ public partial class MainWindow : Window
                 .Select(k => Environment.GetEnvironmentVariable(k) ?? "").ToArray();
             bool authorized = EnvFlag("DROPLINK_AUTHORIZED");
             bool recovery = EnvFlag("DROPLINK_RECOVERY_VERIFIED");
-            var c820 = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)).ToArray();
-            var selected = c820.Length == 1 ? c820[0].InstanceId : "";
+            var radioExe = Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "";
+            var inventory = string.IsNullOrWhiteSpace(radioExe)
+                ? new DeviceInventory.Result([], "未配置后端程序路径")
+                : await Task.Run(() => DeviceInventory.Read(radioExe));
+            var (pnp, target) = PickTarget(devices, inventory);
+            var selected = pnp?.InstanceId ?? "";
             var report = ReadinessReport.Build(new ReadinessReport.Input(devices, selected, files, authorized, recovery));
+            if (target is null && pnp is not null)
+                report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口把它映射到 libusb 设备（可能需重新扫描）。";
             ReceiveStatus.Text = report;
-            // The real chain still has its own fail-closed lock; enabling this
-            // button only means preconditions are met, not that frames will fly.
-            StartButton.IsEnabled = c820.Length == 1 && authorized && recovery &&
+            // Enabling means all preconditions are met AND a real libusb target
+            // was resolved. The chain still re-validates everything fail-closed.
+            StartButton.IsEnabled = pnp is not null && target is not null &&
+                BackendChain.ValidatedTargetSelection(target) && authorized && recovery &&
                 files.Length == 4 && files.All(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f));
         }
         catch (Exception ex) { ReceiveStatus.Text = "检查失败：" + ex.Message; }
@@ -93,22 +100,16 @@ public partial class MainWindow : Window
         try
         {
             var devices = await QueryRadioDevicesAsync();
-            var c820 = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)).ToArray();
             var target = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
-            // libusb lists every USB device; keep only supported Realtek radios
-            // and require a single candidate before letting radio open strictly.
-            UsbDeviceSnapshot? selectedTarget = null;
-            if (target.Error is null)
-            {
-                var radios = target.Devices.Where(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)).ToArray();
-                if (radios.Length == 1) selectedTarget = radios[0];
-            }
+            var (pnp, selectedTarget) = PickTarget(devices, target);
+            if (pnp is null || selectedTarget is null)
+                throw new InvalidOperationException("无法唯一确定目标网卡。请确认仅一块网卡绑定 WinUSB，然后点“检查接收条件”重新扫描。");
             var files = new ChainFiles(
                 Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_BRIDGE_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_NETD_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_AWDLD_EXE") ?? "");
-            await StartSessionAsync(files, devices, c820.Length == 1 ? c820[0].InstanceId : "",
+            await StartSessionAsync(files, devices, pnp.InstanceId,
                 EnvFlag("DROPLINK_AUTHORIZED"), EnvFlag("DROPLINK_RECOVERY_VERIFIED"),
                 Environment.GetEnvironmentVariable("DROPLINK_PYTHON") ?? "python",
                 Environment.GetEnvironmentVariable("DROPLINK_ENGINE_SCRIPT") ?? "",
@@ -121,13 +122,63 @@ public partial class MainWindow : Window
         catch (Exception ex) { ReceiveStatus.Text = "启动失败：" + ex.Message; }
     }
 
+    // Driver rollback changes the system binding, so it is never implicit.
+    // It requires an explicit in-app confirmation, then launches the backed-up
+    // rollback script elevated (UAC). The script itself asks for "RESTORE".
+    private void Rollback_Click(object sender, RoutedEventArgs e)
+    {
+        var script = Environment.GetEnvironmentVariable("DROPLINK_ROLLBACK_CMD") ?? "";
+        if (string.IsNullOrWhiteSpace(script) || !File.Exists(script))
+        {
+            MessageBox.Show(this,
+                "未找到回退脚本。请通过“启动软件.cmd”启动本程序（它会设置脚本路径），" +
+                "或确认备份仍在 work\\_backup\\droplink-driver-20261124\\回退驱动.cmd。",
+                "无法回退", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var answer = MessageBox.Show(this,
+            "即将把 0BDA:C811 网卡从临时 WinUSB 绑定恢复为原厂 Realtek 驱动。\n\n" +
+            "· 系统会弹出管理员授权（UAC）窗口，请点“是”；\n" +
+            "· 随后命令行会要求输入 RESTORE 并回车确认；\n" +
+            "· 恢复后该网卡可重新作为普通 Wi-Fi 使用。\n\n确定继续吗？",
+            "回退驱动", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+        try
+        {
+            var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = true, Verb = "runas" };
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add($"\"{script}\"");
+            Process.Start(psi);
+            ReceiveStatus.Text = "已请求管理员权限运行回退脚本。请在弹出窗口中按提示输入 RESTORE。";
+        }
+        catch (Exception ex) { ReceiveStatus.Text = "无法启动回退脚本：" + ex.Message; }
+    }
+
+    // Pick the single usable radio: among all supported cards, the one that is
+    // bound to WinUSB and healthy is the one we intend to drive. Its PnP port
+    // then identifies the exact libusb device, so two identical C811 cards no
+    // longer make selection ambiguous. All inputs are read-only snapshots.
+    private static (RadioDevice? Device, UsbDeviceSnapshot? Target) PickTarget(
+        IReadOnlyList<RadioDevice> devices, DeviceInventory.Result inventory)
+    {
+        var ready = devices.Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)
+            && string.Equals(d.Service, "WinUSB", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (ready.Length != 1 || inventory.Error is not null) return (null, null);
+        var pnp = ready[0];
+        if (!UsbTopology.TryParseLocation(pnp.LocationInfo, out var port, out _)) return (pnp, null);
+        var match = inventory.Devices.FirstOrDefault(d => RadioPreflight.IsSupportedUsbId(d.Vid, d.Pid)
+            && UsbTopology.TryLastPort(d.PortPath, out var last) && last == port);
+        return (pnp, match);
+    }
+
     private static bool EnvFlag(string name) =>
         Environment.GetEnvironmentVariable(name) is string v && (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
 
     private static async Task<IReadOnlyList<RadioDevice>> QueryRadioDevicesAsync()
     {
         // Query-only: reads PnP instance id, hardware id, driver service and status.
-        const string script = "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match '^USB\\\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}' } | ForEach-Object { $id=$_.InstanceId; $svc=(Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data; [pscustomobject]@{ InstanceId=$id; Hardware=($id -replace '^.*?(VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(?:&MI_[0-9A-F]{2})?).*','USB\\$1'); Service=[string]$svc; Status=$_.Status } } | ConvertTo-Json -Compress";
+        const string script = "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match '^USB\\\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}' } | ForEach-Object { $id=$_.InstanceId; $svc=(Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data; $loc=(Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction SilentlyContinue).Data; [pscustomobject]@{ InstanceId=$id; Hardware=($id -replace '^.*?(VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(?:&MI_[0-9A-F]{2})?).*','USB\\$1'); Service=[string]$svc; Status=$_.Status; Location=[string]$loc } } | ConvertTo-Json -Compress";
         var info = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command", script }) info.ArgumentList.Add(arg);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("无法启动设备查询。");
@@ -144,8 +195,9 @@ public partial class MainWindow : Window
         {
             var hardware = item.GetProperty("Hardware").GetString() ?? "";
             if (!System.Text.RegularExpressions.Regex.IsMatch(hardware, @"^USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+            var location = item.TryGetProperty("Location", out var locProp) ? locProp.GetString() ?? "" : "";
             result.Add(new RadioDevice(item.GetProperty("InstanceId").GetString() ?? "", hardware,
-                item.GetProperty("Service").GetString() ?? "", item.GetProperty("Status").GetString() ?? ""));
+                item.GetProperty("Service").GetString() ?? "", item.GetProperty("Status").GetString() ?? "", location));
         }
         return result;
     }

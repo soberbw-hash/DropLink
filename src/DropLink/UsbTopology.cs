@@ -104,10 +104,30 @@ internal static class UsbTopology
             problems.Add("无法从 PnP 标识解析 VID/PID。");
             return new UsbTopologyResult(false, null, problems);
         }
-        if (hardwareMi is not null && hardwareMi.Value != ExpectedWifiInterface)
-            problems.Add("所选接口不是 Wi-Fi 接口（MI_02）；不会选择蓝牙或复合父设备。");
-        if (!TryParseHardwareId(target.InstanceId, out _, out _, out var instanceMi) || instanceMi != ExpectedWifiInterface)
-            problems.Add("所选 PnP 实例不是 MI_02 接口。");
+        // Composite radios (C820) expose Wi-Fi on MI_02 and Bluetooth on MI_00:
+        // require MI_02. Non-composite radios (C811) have no MI suffix at all:
+        // require the absence of MI so a composite parent/other interface is
+        // never mistaken for the whole-device WinUSB binding.
+        bool composite = vid == 0x0bda && pid == 0xc820;
+        if (!TryParseHardwareId(target.InstanceId, out _, out _, out var instanceMi))
+        {
+            problems.Add("无法从 PnP 实例解析接口编号。");
+        }
+        else if (composite)
+        {
+            if (hardwareMi is not null && hardwareMi.Value != ExpectedWifiInterface)
+                problems.Add("所选接口不是 Wi-Fi 接口（MI_02）；不会选择蓝牙或复合父设备。");
+            if (instanceMi != ExpectedWifiInterface)
+                problems.Add("所选 PnP 实例不是 MI_02 接口。");
+        }
+        else
+        {
+            // Non-composite (e.g. C811 WinUSB whole device): no MI is expected.
+            if (hardwareMi is not null)
+                problems.Add("非复合设备不应带 MI 接口编号。");
+            if (instanceMi is not null)
+                problems.Add("非复合设备的 PnP 实例不应带 MI 接口编号。");
+        }
 
         if (!TryParseLocation(target.LocationInfo, out var locationPort, out _))
         {
