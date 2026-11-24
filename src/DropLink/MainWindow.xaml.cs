@@ -44,12 +44,21 @@ public partial class MainWindow : Window
             // whose window is gone is the "ghost app" the user could not get
             // rid of: it looks alive, answers nothing, and only disappears
             // when the mouse happens to pass over it.
-            tray?.Dispose();
+            //
+            // Guarded per step: this is an async void handler, so a throw here
+            // becomes an app-level error box at the worst possible moment.
+            try { tray?.Dispose(); }
+            catch (Exception error) { AppLog.WriteException("closed: tray", error); }
             tray = null;
-            await CloseSessionAsync();
+            try { await CloseSessionAsync(); }
+            catch (Exception error) { AppLog.WriteException("closed: session", error); }
         };
         // Windows logoff/shutdown must not be blocked by close-to-tray.
-        System.Windows.Application.Current.SessionEnding += (_, _) => exitRequested = true;
+        System.Windows.Application.Current.SessionEnding += (_, _) =>
+        {
+            exitRequested = true;
+            App.ShuttingDown = true;
+        };
         // Create the tray before the first Show so autostart can stay hidden.
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
     }
@@ -294,7 +303,7 @@ public partial class MainWindow : Window
     {
         if (exitRequested) return;
         exitRequested = true;
-        SetStatus(LinkStatus.Idle, "正在退出…");
+        App.ShuttingDown = true;
         // Last resort: a shutdown that hangs on a wedged backend or a tray that
         // will not let go leaves a process with no window and no way back in -
         // the single-instance lock then makes every later launch do nothing.
@@ -305,11 +314,24 @@ public partial class MainWindow : Window
             await Task.Delay(TimeSpan.FromSeconds(6));
             Environment.Exit(0);
         });
+        // Every step is guarded on its own. This used to be one try around the
+        // session only, so anything thrown later - closing the tray icon, or
+        // Shutdown itself - escaped from an async void handler, surfaced as the
+        // "DropLink 异常" box with no explanation, and left the window on screen
+        // after the user had already said close.
+        try { SetStatus(LinkStatus.Idle, "正在退出…"); }
+        catch (Exception error) { AppLog.WriteException("close: status", error); }
         try { await CloseSessionAsync(); }
-        catch (Exception) { /* exit anyway */ }
-        tray?.Dispose();
+        catch (Exception error) { AppLog.WriteException("close: session", error); }
+        try { tray?.Dispose(); }
+        catch (Exception error) { AppLog.WriteException("close: tray", error); }
         tray = null;
-        System.Windows.Application.Current.Shutdown();
+        try { System.Windows.Application.Current.Shutdown(); }
+        catch (Exception error)
+        {
+            AppLog.WriteException("close: shutdown", error);
+            Environment.Exit(0);
+        }
     }
 
     // A future validated chain coordinator calls this; nothing starts at launch.

@@ -30,6 +30,38 @@ internal static class AppLog
     /// <summary>A named point on the startup timeline; the offset is the whole point.</summary>
     public static void Mark(string stage) => Write("stage " + stage);
 
+    /// <summary>
+    /// The whole exception, not its message.
+    ///
+    /// An unhandled exception used to reach the user as a dialog with the type
+    /// name and nothing else: "（详细信息：FileNotFoundException）" over an empty
+    /// line, because that exception carries no message. There was no record of it
+    /// anywhere either, so the only way to identify it was to guess. The stack is
+    /// what makes the next occurrence answerable.
+    /// </summary>
+    public static void WriteException(string context, Exception error)
+    {
+        var text = new System.Text.StringBuilder();
+        text.Append("exception in ").Append(context);
+        var current = error;
+        for (var depth = 0; current is not null && depth < 5; depth++)
+        {
+            text.Append(Environment.NewLine)
+                .Append(new string(' ', depth * 2))
+                .Append(current.GetType().FullName)
+                .Append(": ")
+                .Append(current.Message.Length == 0 ? "(no message)" : current.Message);
+            if (!string.IsNullOrWhiteSpace(current.StackTrace))
+            {
+                text.Append(Environment.NewLine)
+                    .Append(new string(' ', depth * 2))
+                    .Append(current.StackTrace.TrimEnd());
+            }
+            current = current.InnerException;
+        }
+        Write(text.ToString());
+    }
+
     /// <summary>Backend/engine stderr, kept out of the IPC stream and off the UI.</summary>
     public static void WriteEngineStderr(string line) => Append("engine-stderr.log", line);
 

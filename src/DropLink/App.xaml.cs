@@ -121,16 +121,23 @@ public partial class App : System.Windows.Application
         // WPF can throw outside try/catch; show the reason instead of vanishing.
         DispatcherUnhandledException += (_, args) =>
         {
-            MessageBox.Show(
-                "DropLink 遇到问题：\n" + args.Exception.Message +
-                "\n\n（详细信息：" + args.Exception.GetType().Name + "）",
-                "DropLink 异常", MessageBoxButton.OK, MessageBoxImage.Error);
+            AppLog.WriteException("dispatcher", args.Exception);
             args.Handled = true;
+            // Nothing is worth a modal box on the way out: the user asked the app
+            // to close, and a dialog they did not ask for now holds the process
+            // open and makes "关闭" mean something else. Logged above instead.
+            if (ShuttingDown) return;
+            MessageBox.Show(Describe(args.Exception),
+                "DropLink 异常", MessageBoxButton.OK, MessageBoxImage.Error);
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
+            if (args.ExceptionObject is Exception error) AppLog.WriteException("appdomain", error);
+            if (ShuttingDown) return;
             MessageBox.Show(
-                "DropLink 遇到严重问题：\n" + (args.ExceptionObject as System.Exception)?.Message,
+                "DropLink 遇到严重问题：\n" +
+                (args.ExceptionObject as Exception)?.Message +
+                "\n\n（详细信息已写入 data\\logs\\app.log）",
                 "DropLink 严重异常", MessageBoxButton.OK, MessageBoxImage.Error);
         };
 
@@ -152,6 +159,25 @@ public partial class App : System.Windows.Application
             if (openSettings) window.OpenSettingsWindow();
         }
         singleInstance?.ConfirmAlive();
+    }
+
+    // Set once the user has asked the app to close. While it is set, an
+    // unhandled exception is logged and swallowed rather than shown: a dialog
+    // during shutdown keeps a process the user has already dismissed alive.
+    internal static bool ShuttingDown { get; set; }
+
+    // An exception with no message produced a dialog with an empty line and a
+    // bare type name, which reads as "something broke and nobody knows what".
+    // Say what is actually known, and where the stack went.
+    private static string Describe(Exception error)
+    {
+        var text = string.IsNullOrWhiteSpace(error.Message)
+            ? "（这个错误没有附带说明：" + error.GetType().Name + "）"
+            : error.Message;
+        var inner = error.InnerException;
+        var detail = error.GetType().Name + (inner is null ? "" : " / " + inner.GetType().Name);
+        return "DropLink 遇到问题：\n" + text +
+               "\n\n（详细信息：" + detail + "，已写入 data\\logs\\app.log）";
     }
 
     // A launch that never manages to build a window must not keep the

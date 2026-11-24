@@ -230,7 +230,13 @@ internal sealed class TrayIcon : IDisposable
 
     public void Dispose()
     {
-        icon.Visible = false;
-        icon.Dispose();
+        // Two calls, two chances to throw, and this runs on the way out where an
+        // escaping exception is most expensive. WinForms has been seen to raise
+        // FileNotFoundException from inside NotifyIcon teardown; whatever it is,
+        // it belongs in the log, not in a dialog over a closing window.
+        try { icon.Visible = false; }
+        catch (Exception error) { AppLog.WriteException("tray: hide", error); }
+        try { icon.Dispose(); }
+        catch (Exception error) { AppLog.WriteException("tray: dispose", error); }
     }
 }
