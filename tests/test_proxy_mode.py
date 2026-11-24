@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-AIR = ROOT / '.prepared/winawdl/airdrop'
+AIR = pathlib.Path(os.environ.get('DROPLINK_AIRDROP_DIR', ROOT / '.prepared/winawdl/airdrop'))
 sys.path[:0] = [str(AIR), str(AIR / 'tests')]
 import engine
 import sender

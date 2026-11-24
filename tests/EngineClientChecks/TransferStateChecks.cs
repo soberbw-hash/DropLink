@@ -13,6 +13,8 @@ internal static class TransferStateChecks
         state.Apply(Event("{\"event\":\"answered\",\"id\":\"r1\",\"how\":\"accepted\"}"));
         state.Apply(Event("{\"event\":\"incoming\",\"id\":\"r1\",\"done\":50,\"total\":100}"));
         if (row.Progress != "50%") throw new Exception("wrong progress");
+        if (state.Apply(Event("{\"event\":\"answered\",\"id\":\"r1\",\"how\":\"accepted\"}")) is not null || row.Status != "正在接收") throw new Exception("duplicate answer rolled back active transfer");
+        if (state.Apply(Event("{\"event\":\"answered\",\"id\":\"r1\",\"how\":\"rejected\"}")) is not null || row.Finished) throw new Exception("conflicting answer changed accepted transfer");
         state.Apply(Event("{\"event\":\"lost\",\"id\":\"r1\"}"));
         state.Apply(Event("{\"event\":\"stored\",\"id\":\"r1\"}"));
         if (row.Status != "接收失败") throw new Exception("failed transfer displayed as success");

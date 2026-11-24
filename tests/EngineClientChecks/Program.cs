@@ -38,8 +38,13 @@ try
     }
     if (unexpectedExit) throw new Exception("normal shutdown reported as crash");
     Console.WriteLine("PASS: malformed events ignored, request delivered, decline preserved, clean shutdown");
+    if (args.Contains("--mock-only"))
+    {
+        Console.WriteLine("SKIP: real patched engine was not tested (--mock-only)");
+        return;
+    }
     var ready = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-    var actual = Path.Combine(root, ".prepared/winawdl/airdrop/engine.py");
+    var actual = Path.Combine(Environment.GetEnvironmentVariable("DROPLINK_AIRDROP_DIR") ?? Path.Combine(root, ".prepared/winawdl/airdrop"), "engine.py");
     await using (var client = EngineClient.Start(python, actual, Path.Combine(temp, "missing-address"), temp,
         Path.Combine(temp, "keys"), "DropLink test", evt =>
         {

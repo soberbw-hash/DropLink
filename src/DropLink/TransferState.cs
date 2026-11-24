@@ -46,7 +46,9 @@ internal sealed class TransferState
         switch (kind)
         {
             case "answered":
-                if (!ReadString(message, "how", out var how)) return null;
+                // A repeated or out-of-order answer must not roll an active transfer
+                // back to waiting, or change an already accepted decision.
+                if (row.Accepted || !ReadString(message, "how", out var how)) return null;
                 row.Accepted = how == "accepted";
                 row.Status = row.Accepted ? "等待传输" : "未接收";
                 row.Finished = how != "accepted";

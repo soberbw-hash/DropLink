@@ -17,6 +17,15 @@ def run(*args, cwd=None):
     print('+', ' '.join(map(str, args)), flush=True)
     subprocess.run(list(map(str, args)), cwd=cwd, check=True)
 
+
+def apply_patch(repo, patch, *flags):
+    # Git for Windows can check out this repository's patch files with CRLF,
+    # while the pinned upstream files require LF. Normalize the patch stream,
+    # without changing either checkout, before asking Git to check/apply it.
+    args = ['git', '-C', str(repo), 'apply', *flags, '-']
+    print('+', ' '.join(args), '<', patch, flush=True)
+    subprocess.run(args, input=patch.read_bytes().replace(b'\r\n', b'\n'), check=True)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('destination', type=pathlib.Path, help='new, non-existent directory')
@@ -44,9 +53,9 @@ def main():
                         (win, ROOT / 'patches/engine-default-directory.patch'),
                         (win, ROOT / 'patches/atomic-file-publish.patch'),
                         (win, ROOT / 'patches/engine-proxy-mode.patch')):
-        run('git', '-C', repo, 'apply', '--check', patch)
-        run('git', '-C', repo, 'apply', patch)
-    run('git', '-C', win, 'apply', '--reverse', '--check', bridge / 'patches/airdrop-identity.patch')
+        apply_patch(repo, patch, '--check')
+        apply_patch(repo, patch)
+    apply_patch(win, bridge / 'patches/airdrop-identity.patch', '--reverse', '--check')
     print('Prepared source trees. No device, driver or network settings were changed.')
 
 if __name__ == '__main__':
