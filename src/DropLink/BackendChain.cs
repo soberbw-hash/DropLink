@@ -64,7 +64,7 @@ internal sealed class BackendChain : IAsyncDisposable
             // adapter had just been released by a previous run. 150 s used to
             // cut that second case off and report a failure for a radio that
             // was merely slow, which then read as "iPhone 又搜不到了".
-            Stage?.Invoke("正在初始化无线电（固件与射频，通常 1 分钟，偶尔要几分钟）…");
+            Stage?.Invoke("正在初始化无线电（固件与射频）…");
             AppLog.Mark("radio:start");
             await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
                 "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(300), cancel,

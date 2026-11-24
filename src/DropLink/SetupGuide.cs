@@ -12,6 +12,7 @@ internal enum GuideStep
     SwitchDriver,       // step 1: no supported card bound to WinUSB yet
     Rescan,             // WinUSB present but not yet pinned to a libusb device
     StartReceiving,     // step 2: all preconditions met
+    Starting,           // step 2 in progress: the chain is being brought up
     Receiving           // step 3: session running, waiting for an iPhone
 }
 
@@ -33,7 +34,8 @@ internal static class SetupGuide
         bool HasLibusbTarget,
         bool Authorized,
         bool RecoveryVerified,
-        bool SessionRunning);
+        bool SessionRunning,
+        bool Starting);
 
     internal static SetupGuideResult Evaluate(Input input)
     {
@@ -60,6 +62,16 @@ internal static class SetupGuide
                 GuideStep.Receiving, "第 3 步 / 共 3 步",
                 "正在接收",
                 "在 iPhone 上用隔空投送分享文件，选这台电脑。",
+                "", false);
+
+        // A chain that is still coming up is not "ready to start": saying so
+        // would put a button under a status line that already says it is
+        // working, and pressing it started a second chain on top of the first.
+        if (input.Starting)
+            return new SetupGuideResult(
+                GuideStep.Starting, "第 2 步 / 共 3 步",
+                "正在初始化网卡",
+                "通常 1 分钟，偶尔要几分钟。完成后会自动开始接收，这期间不用点任何东西。",
                 "", false);
 
         if (input.ReadyWinUsbCards == 0)

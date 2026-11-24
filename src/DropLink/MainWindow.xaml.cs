@@ -23,6 +23,13 @@ public partial class MainWindow : Window
     private int restartAttempts;
     private bool restartScheduled;
     private string lastStage = "";
+    // True from the moment a start attempt begins until it succeeds or fails.
+    // Without it, the "开启接收" button stayed live during a start and a second
+    // press launched a second chain on top of the first.
+    private bool starting;
+    private bool spinnerRunning;
+    private bool pulseRunning;
+    private System.Windows.Media.Animation.Storyboard? pulse;
     public MainWindow()
     {
         InitializeComponent();
@@ -157,6 +164,45 @@ public partial class MainWindow : Window
         StatusHint.Visibility = string.IsNullOrEmpty(hint) ? Visibility.Collapsed : Visibility.Visible;
         Title = "DropLink · " + text;
         tray?.SetStatus(text);
+        // A dot that breathes while the app is working is the cheapest honest
+        // "still busy" signal. A static dot beside "正在初始化" looks frozen.
+        // Stop() is only legal after a controllable Begin(), hence the flag.
+        if (kind == LinkStatus.Working)
+        {
+            if (!pulseRunning)
+            {
+                pulse ??= (System.Windows.Media.Animation.Storyboard)FindResource("PulseDot");
+                pulse.Begin(this, true);
+                pulseRunning = true;
+            }
+        }
+        else if (pulseRunning)
+        {
+            pulse?.Stop(this);
+            pulseRunning = false;
+            StatusDot.Opacity = 1;
+        }
+    }
+
+    // Rotating ring beside the card title. Started once and left running while
+    // visible: it is composited off the UI thread, so a hidden ring costs
+    // nothing, and it never claims progress that is not happening because it is
+    // only shown for the one state that is genuinely in progress.
+    private void SetSpinning(bool on)
+    {
+        Spinner.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        if (on == spinnerRunning) return;
+        spinnerRunning = on;
+        if (!on)
+        {
+            SpinnerAngle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty, null);
+            return;
+        }
+        SpinnerAngle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9))
+            {
+                RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+            });
     }
 
     // "未在接收" on its own only restates the problem, so the hint says which
@@ -169,7 +215,8 @@ public partial class MainWindow : Window
             GuideStep.Rescan => ("网卡已换好驱动，还差拔插重扫", LinkStatus.Idle),
             GuideStep.NeedRestart => ("重新打开一次 DropLink 就会继续", LinkStatus.Idle),
             GuideStep.EnvironmentBlocked => ("后端组件缺失，见下方详细信息", LinkStatus.Failed),
-            GuideStep.StartReceiving => ("条件已满足，正在自动开启…", LinkStatus.Working),
+            GuideStep.StartReceiving => ("条件已满足，马上自动开启", LinkStatus.Idle),
+            GuideStep.Starting => ("正在初始化网卡，通常 1 分钟", LinkStatus.Working),
             _ => ("", LinkStatus.Idle)
         };
         SetStatus(kind, "未在接收", hint);
@@ -333,7 +380,10 @@ public partial class MainWindow : Window
         _ = Dispatcher.BeginInvoke(() =>
         {
             lastStage = message;
-            SetStatus(LinkStatus.Working, message.TrimEnd('…', '.', ' '), "网卡初始化中，完成后会自动开始接收");
+            // No duration hint here: the card owns "how long and what happens
+            // next". Repeating it on both lines was the exact noise the user
+            // pointed at.
+            SetStatus(LinkStatus.Working, message.TrimEnd('…', '.', ' '));
             if (!transientProgress) return;
             ProgressText.Text = message;
             ProgressPanel.Visibility = Visibility.Visible;
@@ -407,8 +457,9 @@ public partial class MainWindow : Window
     {
         GuideTitle.Text = "正在检查设备与驱动…";
         // A refresh is not a state change: a live session keeps its own line
-        // instead of flickering back to "checking" every time the guide runs.
-        if (session is null) SetStatus(LinkStatus.Working, "正在检查设备…");
+        // instead of flickering back to "checking" every time the guide runs,
+        // and so does a start that is still in flight.
+        if (session is null && !starting) SetStatus(LinkStatus.Working, "正在检查设备…");
         try
         {
             var devices = await QueryRadioDevicesAsync();
@@ -428,7 +479,7 @@ public partial class MainWindow : Window
                 && string.Equals(d.Status, "OK", StringComparison.OrdinalIgnoreCase));
 
             var guide = SetupGuide.Evaluate(new SetupGuide.Input(
-                files, readyCards, hasTarget, authorized, recovery, session is not null));
+                files, readyCards, hasTarget, authorized, recovery, session is not null, starting));
             currentStep = guide.Step;
             ApplyGuide(guide);
 
@@ -438,8 +489,10 @@ public partial class MainWindow : Window
                 report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口映射到 libusb 设备（可拔插后重扫）。";
             ReceiveStatus.Text = report;
             // The guide has spoken, so the header can too: when nothing runs,
-            // say why instead of leaving the last busy message on screen.
-            if (session is null) SetIdleStatus();
+            // say why instead of leaving the last busy message on screen. While
+            // a start is in flight the header is already correct and must not
+            // be talked over with "未在接收".
+            if (session is null && !starting) SetIdleStatus();
         }
         catch (Exception ex)
         {
@@ -474,10 +527,14 @@ public partial class MainWindow : Window
         int active = guide.Step switch
         {
             GuideStep.SwitchDriver or GuideStep.Rescan => 1,
-            GuideStep.StartReceiving => 2,
+            GuideStep.StartReceiving or GuideStep.Starting => 2,
             GuideStep.Receiving => 3,
             _ => 0
         };
+        // A wait with no motion reads as a hang. The ring only turns while
+        // something is genuinely in progress, so it never claims activity that
+        // is not happening.
+        SetSpinning(guide.Step == GuideStep.Starting);
         HighlightStep(Step1Box, Step1Text, "1  换驱动", active, 1);
         HighlightStep(Step2Box, Step2Text, "2  开启接收", active, 2);
         HighlightStep(Step3Box, Step3Text, "3  收文件", active, 3);
@@ -560,10 +617,16 @@ public partial class MainWindow : Window
         // the first, and the failure path below used to tear that first one
         // down - a healthy chain killed by a redundant attempt.
         if (session is not null) return;
-        // The radio needs ~45 s of firmware + RF init before the chain is up,
-        // so say so instead of appearing frozen.
-        ShowProgress("正在初始化网卡（通常 1 分钟，偶尔要几分钟），请不要关闭窗口…");
-        SetStatus(LinkStatus.Working, "正在初始化网卡", "通常 1 分钟，完成后自动开始接收");
+        // One attempt at a time. The status line and the card both say "正在
+        // 初始化" while this runs, and the card no longer offers a button - so a
+        // second entry can only come from the auto-restart path, which must not
+        // stack a second chain on top of a start that is still in flight.
+        if (starting) return;
+        starting = true;
+        // The radio needs ~45 s of firmware + RF init before the chain is up.
+        // The stage line carries the detail from here on; a second copy in the
+        // progress box said the same sentence twice on the same screen.
+        SetStatus(LinkStatus.Working, "正在初始化网卡");
         AppLog.Mark("session:start requested");
         try
         {
@@ -613,6 +676,10 @@ public partial class MainWindow : Window
                 : lastStage.TrimEnd('…', '.', ' ');
             var reason = $"启动失败（阶段：{stage}）\n原因：{ex.Message}\n日志：data\\logs\\app.log";
             AppLog.Write($"start failed at [{stage}]: {ex.Message}");
+            // Release the flag first: the guide has to see "not starting any
+            // more", otherwise it keeps saying 正在初始化 and keeps the retry
+            // button hidden after a failure that needs exactly that button.
+            starting = false;
             await CheckReadinessAsync(); // back to step 2 so the button works again
             // Leaving "正在初始化网卡…" on screen after a failure is what makes a
             // failed start look like a hang. Replace it with the real reason.
@@ -627,6 +694,7 @@ public partial class MainWindow : Window
             if (silent) tray?.Notify("DropLink 没能开始接收", ex.Message);
             ScheduleRestart(ex.Message);
         }
+        finally { starting = false; }
     }
 
     // Driver rollback goes through the same confirmed, elevated, self-refreshing

@@ -1,4 +1,11 @@
 <Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink" Width="800" SizeToContent="Height" MaxHeight="780" MinWidth="700" MinHeight="360" ShowInTaskbar="True" WindowStartupLocation="CenterScreen" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
+ <Window.Resources>
+  <!-- Breathing status dot. Begun and stopped from SetStatus so it only moves
+       while the app is actually working. -->
+  <Storyboard x:Key="PulseDot">
+   <DoubleAnimation Storyboard.TargetName="StatusDot" Storyboard.TargetProperty="Opacity" From="1" To="0.3" Duration="0:0:0.65" AutoReverse="True" RepeatBehavior="Forever"/>
+  </Storyboard>
+ </Window.Resources>
  <Grid Margin="40,28,40,24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <StackPanel><TextBlock Text="DropLink" FontSize="26" FontWeight="Medium" Foreground="#17233C"/><TextBlock Text="把 iPhone 的照片和文件隔空投送到这台电脑" Foreground="#66758D" Margin="0,5,0,0"/>
    <!-- The state line. It is outside the card on purpose: the card's content
@@ -25,7 +32,18 @@
     </StackPanel>
 
     <TextBlock x:Name="GuideStepLabel" Text="正在检查…" FontSize="13" Foreground="#2C6BED" FontWeight="Medium" Margin="0,0,0,6"/>
-    <TextBlock x:Name="GuideTitle" Text="正在检查设备与驱动…" FontSize="22" FontWeight="Medium" Foreground="#17233C" TextWrapping="Wrap"/>
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+     <!-- Turns only while the chain is being brought up; collapsed otherwise so
+          it never implies work that is not happening. -->
+     <Grid x:Name="Spinner" Grid.Column="0" Width="20" Height="20" Margin="0,0,12,0" VerticalAlignment="Center" Visibility="Collapsed">
+      <Ellipse Stroke="#DCE4F3" StrokeThickness="2.5"/>
+      <Ellipse Stroke="#2C6BED" StrokeThickness="2.5" StrokeDashArray="6 17" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
+       <Ellipse.RenderTransform><RotateTransform x:Name="SpinnerAngle"/></Ellipse.RenderTransform>
+      </Ellipse>
+     </Grid>
+     <TextBlock x:Name="GuideTitle" Grid.Column="1" Text="正在检查设备与驱动…" FontSize="22" FontWeight="Medium" Foreground="#17233C" TextWrapping="Wrap"/>
+    </Grid>
     <TextBlock x:Name="GuideDetail" Text="" FontSize="14" Foreground="#52627C" TextWrapping="Wrap" Margin="0,8,0,18" LineHeight="21"/>
 
     <Button x:Name="GuideAction" Content="检查接收条件" HorizontalAlignment="Left" Padding="26,11" FontSize="15" FontWeight="Medium" Foreground="White" Background="#2C6BED" BorderBrush="#2C6BED" Focusable="False" Click="GuideAction_Click"/>
