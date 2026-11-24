@@ -18,9 +18,10 @@ public partial class MainWindow : Window
     // details box, so the details box can stay collapsed until the user asks.
     private bool transientProgress;
     private bool initialized;
-    // True when the process was launched with --tray by the logon task: the
-    // window stays hidden, so the receiver has to start itself.
-    internal bool BackgroundMode { get; set; }
+    // The receiver is meant to be always-on: it starts itself on launch and
+    // restarts itself when the chain dies, so the user never has to click.
+    private int restartAttempts;
+    private bool restartScheduled;
     public MainWindow()
     {
         InitializeComponent();
@@ -43,9 +44,12 @@ public partial class MainWindow : Window
         initialized = true;
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
         await CheckReadinessAsync();
-        if (!BackgroundMode || session is not null) return;
+        if (session is not null) return;
+        // Always-on receiver: start without being asked, whichever way it was
+        // launched. It only starts when the guide already says it is ready, so a
+        // machine without the card or driver still shows step 1/2 instead.
         // At logon the USB card may not be enumerated yet, so give it a bounded
-        // window to show up instead of failing the whole background start once.
+        // window to show up instead of failing the whole start once.
         for (var attempt = 0; attempt < 3 && session is null; attempt++)
         {
             if (attempt > 0)
@@ -54,9 +58,12 @@ public partial class MainWindow : Window
                 await CheckReadinessAsync();
             }
             if (currentStep != GuideStep.StartReceiving) continue;
-            // Logon start is meant to be hands-off: come up already receiving.
             await StartReceiveAsync(silent: true);
         }
+        // Tell the user it is live, otherwise a silent logon start is invisible.
+        if (session is not null && !IsVisible)
+            tray?.Notify("DropLink 已在后台接收",
+                "iPhone 隔空投送里选这台电脑就能投，收到文件会在右下角提示。");
     }
 
     private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit);
@@ -143,7 +150,42 @@ public partial class MainWindow : Window
             else MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning);
             try { await CloseSessionAsync(); await CheckReadinessAsync(); }
             catch (Exception) { /* refresh is best-effort */ }
+            // Bring the receiver back by itself: the point of running in the
+            // tray is that the user never has to notice it stopped.
+            ScheduleRestart(message);
         });
+
+    // Keeps the receiver alive without user action. Backs off, then gives up
+    // after a handful of tries so an unplugged card does not churn forever.
+    private void ScheduleRestart(string reason)
+    {
+        if (exitRequested || restartScheduled) return;
+        restartAttempts++;
+        if (restartAttempts > 6)
+        {
+            AppLog.Write("auto restart gave up: " + reason);
+            tray?.Notify("DropLink 已停止自动重试", "连续多次没能启动接收，点开界面看看原因。");
+            return;
+        }
+        restartScheduled = true;
+        var delay = TimeSpan.FromSeconds(Math.Min(60, 10 * restartAttempts));
+        AppLog.Write($"auto restart #{restartAttempts} in {delay.TotalSeconds:0}s: {reason}");
+        _ = RestartAfterDelayAsync(delay);
+    }
+
+    private async Task RestartAfterDelayAsync(TimeSpan delay)
+    {
+        try
+        {
+            await Task.Delay(delay);
+            if (exitRequested || session is not null) return;
+            await CheckReadinessAsync();
+            if (currentStep != GuideStep.StartReceiving) return;
+            await StartReceiveAsync(silent: true);
+        }
+        catch (Exception error) { AppLog.Write("auto restart failed: " + error.Message); }
+        finally { restartScheduled = false; }
+    }
 
     // Engine facts are applied on the UI thread; an 'asked' event triggers an
     // explicit confirmation whose answer is sent back through the session.
@@ -348,6 +390,7 @@ public partial class MainWindow : Window
                 Environment.GetEnvironmentVariable("DROPLINK_KEYS_DIR") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_DEVICE_NAME") ?? "DropLink",
                 selectedTarget, legacy);
+            restartAttempts = 0; // a healthy chain clears the backoff history
             await CheckReadinessAsync(); // advance the guide to "receiving" (step 3)
         }
         catch (Exception ex)
@@ -369,6 +412,7 @@ public partial class MainWindow : Window
             // A hidden receiver must not open a modal box at logon; the tray is
             // the only thing the user can see, so report it there.
             if (silent) tray?.Notify("DropLink 没能开始接收", ex.Message);
+            ScheduleRestart(ex.Message);
         }
     }
 
