@@ -44,7 +44,6 @@ REQUIRED = [
     'backend/airdrop/notify.ps1',
     'backend/airdrop/toast-action.ps1',
     'backend/airdrop/settings-tool.ps1',
-    'backend/airdrop/settings-gui.ps1',
     'backend/airdrop/test-card.ps1',
     'backend/airdrop/benchmark.ps1',
     'data/settings.default.json',

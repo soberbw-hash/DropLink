@@ -71,17 +71,5 @@ internal static class AppLog
         catch (Exception) { /* rotation is best-effort */ }
     }
 
-    private static string DataDirectory()
-    {
-        var output = Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR");
-        if (!string.IsNullOrWhiteSpace(output) &&
-            Path.GetDirectoryName(output.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) is { Length: > 0 } parent)
-            return parent;
-        var exe = Environment.ProcessPath;
-        var appDir = string.IsNullOrWhiteSpace(exe)
-            ? AppContext.BaseDirectory
-            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
-        var root = Directory.GetParent(appDir)?.FullName ?? appDir;
-        return Path.Combine(root, "data");
-    }
+    private static string DataDirectory() => AppPaths.DataDirectory();
 }

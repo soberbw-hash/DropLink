@@ -18,7 +18,7 @@ internal sealed class TrayIcon : IDisposable
     private readonly Forms.NotifyIcon icon;
     private readonly Forms.ToolStripMenuItem statusItem;
 
-    public TrayIcon(Window window, Action exit)
+    public TrayIcon(Window window, Action exit, Action openSettings)
     {
         this.window = window;
         // The first item restates the header, so a right-click answers "还在收吗"
@@ -28,7 +28,10 @@ internal sealed class TrayIcon : IDisposable
         var open = new Forms.ToolStripMenuItem("打开主界面");
         open.Click += (_, _) => ShowWindow();
         var settings = new Forms.ToolStripMenuItem("设置");
-        settings.Click += (_, _) => OpenSettings();
+        // Opens the in-app page. It used to launch settings-gui.ps1, which put a
+        // PowerShell console on screen and a second, differently styled form on
+        // top of it - the user read that as "why does settings jump to PowerShell".
+        settings.Click += (_, _) => openSettings();
         var folder = new Forms.ToolStripMenuItem("打开接收文件夹");
         folder.Click += (_, _) => OpenReceiveFolder();
         var diagnostics = new Forms.ToolStripMenuItem("导出诊断包");
@@ -112,24 +115,6 @@ internal sealed class TrayIcon : IDisposable
         }
         catch (Exception) { /* fall back to the stock icon */ }
         return SystemIcons.Application;
-    }
-
-    private static void OpenSettings()
-    {
-        var script = Path.Combine(PortableRoot(), "backend", "airdrop", "settings-gui.ps1");
-        if (!File.Exists(script))
-        {
-            MessageBox.Show("找不到设置脚本：\n" + script, "DropLink",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        var info = new ProcessStartInfo("powershell.exe")
-        {
-            UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(script) ?? PortableRoot(),
-            Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\""
-        };
-        Process.Start(info);
     }
 
     private static void OpenReceiveFolder()

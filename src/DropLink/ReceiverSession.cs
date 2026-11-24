@@ -147,6 +147,12 @@ internal sealed class ReceiverSession : IAsyncDisposable
         return current.AnswerAsync(id, accept);
     }
 
+    internal Task SetNameAsync(string name)
+    {
+        var current = engine ?? throw new InvalidOperationException("接收会话未启动。");
+        return current.SetNameAsync(name);
+    }
+
     private void OnChainFailed(string message) => Failed?.Invoke(message);
 
     private void OnChainStage(string message) => Stage?.Invoke(message);

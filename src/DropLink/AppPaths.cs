@@ -14,6 +14,34 @@ namespace DropLink;
 /// </summary>
 internal static class AppPaths
 {
+    /// <summary>
+    /// The portable root: the folder that holds app\ and backend\. Every path
+    /// the app writes (data\settings.json, data\logs, data\received) hangs off
+    /// this, so it has to be derived the same way everywhere.
+    /// </summary>
+    public static string PortableRoot()
+    {
+        var exe = Environment.ProcessPath;
+        var appDir = string.IsNullOrWhiteSpace(exe)
+            ? AppContext.BaseDirectory
+            : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
+        return Directory.GetParent(appDir)?.FullName ?? appDir;
+    }
+
+    /// <summary>
+    /// The data folder. A launcher-injected DROPLINK_OUTPUT_DIR wins, because
+    /// that is the folder the receiver was actually told to save into; without
+    /// it the portable root decides.
+    /// </summary>
+    public static string DataDirectory()
+    {
+        var output = Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR");
+        if (!string.IsNullOrWhiteSpace(output) &&
+            Path.GetDirectoryName(output.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) is { Length: > 0 } parent)
+            return parent;
+        return Path.Combine(PortableRoot(), "data");
+    }
+
     public static void EnsureEnvironment(string? baseDir = null)
     {
         // Environment.ProcessPath is the real exe path; AppContext.BaseDirectory

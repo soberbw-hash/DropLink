@@ -21,6 +21,12 @@ public partial class App : System.Windows.Application
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
 
+        // Dev-only: render the settings page to a PNG and exit, so a layout
+        // regression is visible without clicking through the app. Placed before
+        // the single-instance and stale-chain logic on purpose: a preview must
+        // not disturb a receiver that is already running.
+        if (TryPreviewSettings(e.Args)) { Shutdown(); return; }
+
         // A portable app that can only be started from a .cmd does not read as
         // a real program. The shortcut is written by the shell itself, so it is
         // an ordinary .lnk that Explorer, the Start menu and "pin to taskbar"
@@ -64,8 +70,14 @@ public partial class App : System.Windows.Application
         // else is pending, and a receiver that is busy starting a chain can go
         // minutes without draining it. That is how double-clicking the icon
         // produced nothing while the app was in fact running.
-        singleInstance = new SingleInstance(() =>
-            _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(ShowExistingWindow)));
+        // `DropLink.exe --settings` is what the portable kit's settings shortcut
+        // runs. A second launch with it must reach the instance that already owns
+        // the receiver, so the request rides its own named event.
+        var openSettings = e.Args.Contains("--settings", StringComparer.OrdinalIgnoreCase);
+        singleInstance = new SingleInstance(
+            () => _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(ShowExistingWindow)),
+            () => _ = Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(ShowWindowAndSettings)),
+            requestOpenSettings: openSettings);
         if (!singleInstance.IsFirst)
         {
             Shutdown();
@@ -112,7 +124,60 @@ public partial class App : System.Windows.Application
         else
         {
             window.Show();
+            if (openSettings) window.OpenSettingsWindow();
         }
+    }
+
+    // `DropLink.exe --preview-settings out.png` renders the settings page exactly
+    // as it is laid out and writes a PNG. It exists because the page's whole job
+    // is to not look crowded, and that cannot be reviewed from source.
+    private static bool TryPreviewSettings(string[] args)
+    {
+        var index = Array.FindIndex(args, a => a.Equals("--preview-settings", StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        if (index + 1 >= args.Length) return true;
+        var target = args[index + 1];
+        try
+        {
+            var page = new SettingsWindow(null) { ShowInTaskbar = false };
+            page.Show();
+            // The page fills in the autostart switch from a PowerShell query; wait
+            // for that answer, otherwise the screenshot shows a half-loaded page.
+            // The dispatcher has to be the UI one captured here: inside the
+            // continuation Dispatcher.CurrentDispatcher would create a fresh one
+            // on the pool thread and the frame would only end on the timeout.
+            var dispatcher = Current.Dispatcher;
+            var frame = new DispatcherFrame();
+            var giveUp = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal,
+                (_, _) => frame.Continue = false, dispatcher);
+            giveUp.Start();
+            _ = page.Ready.ContinueWith(_ => dispatcher.BeginInvoke(
+                new Action(() => frame.Continue = false)));
+            Dispatcher.PushFrame(frame);
+            giveUp.Stop();
+
+            // Render the content root, not the Window: Window.ActualHeight
+            // includes the title bar, which would leave a transparent band at the
+            // bottom of the PNG and make the page look taller than it is.
+            var root = (FrameworkElement)page.Content;
+            root.UpdateLayout();
+            var width = (int)Math.Ceiling(root.ActualWidth);
+            var height = (int)Math.Ceiling(root.ActualHeight);
+            var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                Math.Max(width, 1), Math.Max(height, 1), 96, 96,
+                System.Windows.Media.PixelFormats.Pbgra32);
+            bitmap.Render(root);
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+            using (var stream = File.Create(target)) encoder.Save(stream);
+            AppLog.Write($"preview-settings wrote {target} ({width}x{height})");
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("preview-settings failed: " + error.Message);
+        }
+        return true;
     }
 
     // Written once, and never overwritten: a shortcut the user renamed or moved
@@ -169,6 +234,12 @@ public partial class App : System.Windows.Application
             }
             AppLog.Write("activate requested but no window exists yet");
         });
+    }
+
+    private void ShowWindowAndSettings()
+    {
+        ShowExistingWindow();
+        if (MainWindow is MainWindow ready) ready.OpenSettingsWindow();
     }
 
     protected override void OnExit(ExitEventArgs e)

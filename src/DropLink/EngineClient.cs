@@ -66,6 +66,13 @@ internal sealed class EngineClient : IAsyncDisposable
 
     public Task AnswerAsync(string id, bool accept) => SendAsync(new { @do = "answer", id, accept });
 
+    /// <summary>
+    /// Rename the receiver while it is running. The engine validates the name
+    /// and reports a refusal through its 'settings' event; nothing here can
+    /// decide whether a name is acceptable.
+    /// </summary>
+    public Task SetNameAsync(string name) => SendAsync(new { @do = "set", name });
+
     private async Task SendAsync(object command)
     {
         await writeLock.WaitAsync().ConfigureAwait(false);

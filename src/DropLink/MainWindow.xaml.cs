@@ -11,6 +11,7 @@ public partial class MainWindow : Window
     private readonly TransferState transferState = new();
     private ReceiverSession? session;
     private TrayIcon? tray;
+    private SettingsWindow? settingsWindow;
     private bool exitRequested;
     private GuideStep currentStep = GuideStep.EnvironmentBlocked;
     private bool detailsVisible;
@@ -125,7 +126,54 @@ public partial class MainWindow : Window
             tray?.Notify("DropLink 已在后台接收",
                 "iPhone 隔空投送里选这台电脑就能投，收到文件会在右下角提示。");    }
 
-    private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit);
+    private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit, OpenSettingsWindow);
+
+    /// <summary>
+    /// Settings open inside the app. It used to launch settings-gui.ps1, which
+    /// flashed a PowerShell console and then a second form built with absolute
+    /// coordinates; this is the same data\settings.json edited by a normal page.
+    /// </summary>
+    internal void OpenSettingsWindow()
+    {
+        if (settingsWindow is not null)
+        {
+            if (settingsWindow.WindowState == WindowState.Minimized)
+                settingsWindow.WindowState = WindowState.Normal;
+            settingsWindow.Activate();
+            return;
+        }
+        var page = new SettingsWindow(ApplyDeviceNameAsync);
+        // CenterOwner is wrong when the main window was never shown (the logon
+        // scheduled task starts with --tray): the page would be positioned off an
+        // invisible window. Only own it when it is actually on screen.
+        if (IsVisible)
+        {
+            page.Owner = this;
+            page.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+        else page.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        page.Closed += (_, _) => settingsWindow = null;
+        settingsWindow = page;
+        page.Show();
+        page.Activate();
+    }
+
+    /// <summary>
+    /// Pushes a new device name to the receiver that is already running. Renaming
+    /// only on the next start would leave the phone showing the old name with
+    /// nothing explaining why, so this is applied live when possible. Returns
+    /// false when there is nothing running to rename - the settings file is
+    /// already written, so that is "next start", not a failure.
+    /// </summary>
+    private async Task<bool> ApplyDeviceNameAsync(string name)
+    {
+        var current = session;
+        if (current is null) return false;
+        await current.SetNameAsync(name);
+        return true;
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettingsWindow();
 
     // A second launch signals this window back; tray double-click uses the same path.
     public void ShowFromTray()

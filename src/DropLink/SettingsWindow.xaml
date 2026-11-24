@@ -1,0 +1,200 @@
+<Window x:Class="DropLink.SettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink 设置" Width="760" SizeToContent="Height" MaxHeight="880" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="True" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
+ <Window.Resources>
+  <!-- One card per subject. Rows are separated by hairlines instead of being
+       packed edge to edge: the old settings window placed every control by
+       absolute Left/Top, which is why it read as a wall. -->
+  <Style x:Key="Card" TargetType="Border">
+   <Setter Property="Background" Value="White"/>
+   <Setter Property="CornerRadius" Value="16"/>
+   <Setter Property="Padding" Value="28,22"/>
+   <Setter Property="Margin" Value="0,0,0,14"/>
+   <Setter Property="BorderBrush" Value="#E4E9F2"/>
+   <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style x:Key="SectionTitle" TargetType="TextBlock">
+   <Setter Property="FontSize" Value="13"/>
+   <Setter Property="FontWeight" Value="Medium"/>
+   <Setter Property="Foreground" Value="#2C6BED"/>
+   <Setter Property="Margin" Value="0,0,0,4"/>
+  </Style>
+  <Style x:Key="RowTitle" TargetType="TextBlock">
+   <Setter Property="FontSize" Value="15"/>
+   <Setter Property="Foreground" Value="#17233C"/>
+  </Style>
+  <Style x:Key="RowHint" TargetType="TextBlock">
+   <Setter Property="FontSize" Value="12.5"/>
+   <Setter Property="Foreground" Value="#8B97AC"/>
+   <Setter Property="TextWrapping" Value="Wrap"/>
+   <Setter Property="Margin" Value="0,5,0,0"/>
+  </Style>
+  <Style x:Key="Hairline" TargetType="Border">
+   <Setter Property="Height" Value="1"/>
+   <Setter Property="Background" Value="#EEF1F7"/>
+   <Setter Property="Margin" Value="0,18"/>
+  </Style>
+
+  <!-- Switch instead of a checkbox: a 40x22 track is legible at a glance and
+       does not look like a form from 2005. -->
+  <Style x:Key="Switch" TargetType="CheckBox">
+   <Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="CheckBox">
+      <Border x:Name="track" Width="42" Height="24" CornerRadius="12" Background="#D7DDE9">
+       <Border x:Name="knob" Width="18" Height="18" CornerRadius="9" Background="White" HorizontalAlignment="Left" Margin="3,0,0,0"/>
+      </Border>
+      <ControlTemplate.Triggers>
+       <Trigger Property="IsChecked" Value="True">
+        <Setter TargetName="track" Property="Background" Value="#2C6BED"/>
+        <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right"/>
+        <Setter TargetName="knob" Property="Margin" Value="0,0,3,0"/>
+       </Trigger>
+       <Trigger Property="IsEnabled" Value="False">
+        <Setter TargetName="track" Property="Opacity" Value="0.45"/>
+       </Trigger>
+      </ControlTemplate.Triggers>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
+
+  <Style x:Key="PrimaryButton" TargetType="Button">
+   <Setter Property="Background" Value="#2C6BED"/>
+   <Setter Property="Foreground" Value="White"/>
+   <Setter Property="FontSize" Value="14"/>
+   <Setter Property="FontWeight" Value="Medium"/>
+   <Setter Property="Padding" Value="26,10"/>
+   <Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+       <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
+  <Style x:Key="GhostButton" TargetType="Button">
+   <Setter Property="Background" Value="White"/>
+   <Setter Property="Foreground" Value="#52627C"/>
+   <Setter Property="FontSize" Value="13.5"/>
+   <Setter Property="Padding" Value="18,9"/>
+   <Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="Template">
+    <Setter.Value>
+     <ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" BorderBrush="#DDE3EE" BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
+       <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+     </ControlTemplate>
+    </Setter.Value>
+   </Setter>
+  </Style>
+ </Window.Resources>
+
+ <!-- The page background lives on this Border as well as on the Window so the
+      preview render (preview-settings switch) captures the full client area with
+      its padding, not just the inner column. -->
+ <Border Background="#F5F7FB">
+ <StackPanel Margin="34,26,34,22">
+  <TextBlock Text="设置" FontSize="26" FontWeight="Medium" Foreground="#17233C"/>
+  <TextBlock Text="改完立刻生效，不用点保存。关掉这个窗口就行。" FontSize="13" Foreground="#66758D" Margin="0,6,0,20" TextWrapping="Wrap"/>
+
+  <Border Style="{StaticResource Card}">
+   <StackPanel>
+    <TextBlock Text="接收" Style="{StaticResource SectionTitle}"/>
+
+    <Grid Margin="0,10,0,0">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Grid.Column="0" Margin="0,0,20,0">
+      <TextBlock Text="这台电脑在 iPhone 上显示的名字" Style="{StaticResource RowTitle}"/>
+      <TextBlock Text="隔空投送列表里看到的就是它。留空则用电脑名。" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <!-- The placeholder shows the name that will actually be used when the box
+          is empty, so "留空则用电脑名" is concrete instead of a promise. -->
+     <Grid Grid.Column="1" Width="260">
+      <TextBox x:Name="DeviceNameBox" Padding="10,8" FontSize="14" Foreground="#17233C"
+               Background="#FBFCFE" BorderBrush="#DDE3EE" BorderThickness="1" VerticalContentAlignment="Center" MaxLength="40"
+               LostFocus="DeviceName_Commit" KeyDown="DeviceName_KeyDown"/>
+      <TextBlock x:Name="DeviceNamePlaceholder" IsHitTestVisible="False" Foreground="#A9B4C6" FontSize="14"
+                 Margin="13,0,0,0" VerticalAlignment="Center"/>
+     </Grid>
+    </Grid>
+
+    <Border Style="{StaticResource Hairline}"/>
+
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Grid.Column="0" Margin="0,0,20,0">
+      <TextBlock Text="自动接收" Style="{StaticResource RowTitle}"/>
+      <TextBlock Text="收到请求直接接受，不弹确认框。关掉后每次都要你点一下。" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <CheckBox x:Name="AutoReceiveSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"
+               Checked="ReceiveSetting_Toggled" Unchecked="ReceiveSetting_Toggled"/>
+    </Grid>
+
+    <Border Style="{StaticResource Hairline}"/>
+
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Grid.Column="0" Margin="0,0,20,0">
+      <TextBlock Text="实况图额外存一张静态图" Style="{StaticResource RowTitle}"/>
+      <TextBlock Text="iPhone 的实况照片是「视频 + 图」的包，多存一张普通图方便直接看和发。" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <CheckBox x:Name="LivePhotoSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"
+               Checked="ReceiveSetting_Toggled" Unchecked="ReceiveSetting_Toggled"/>
+    </Grid>
+
+    <Border Style="{StaticResource Hairline}"/>
+
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Grid.Column="0" Margin="0,0,20,0">
+      <TextBlock Text="通知里补充可查看的格式" Style="{StaticResource RowTitle}"/>
+      <TextBlock Text="只在这种信息文件名本身看不出来时才出现（比如实况图）。" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <CheckBox x:Name="FormatSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"
+               Checked="ReceiveSetting_Toggled" Unchecked="ReceiveSetting_Toggled"/>
+    </Grid>
+   </StackPanel>
+  </Border>
+
+  <Border Style="{StaticResource Card}">
+   <StackPanel>
+    <TextBlock Text="启动" Style="{StaticResource SectionTitle}"/>
+    <Grid Margin="0,10,0,0">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Grid.Column="0" Margin="0,0,20,0">
+      <TextBlock Text="开机自动启动" Style="{StaticResource RowTitle}"/>
+      <TextBlock x:Name="AutostartHint" Text="登录 Windows 后在后台开始接收，不弹窗口、不弹 UAC。" Style="{StaticResource RowHint}"/>
+     </StackPanel>
+     <CheckBox x:Name="AutostartSwitch" Grid.Column="1" Style="{StaticResource Switch}" VerticalAlignment="Center"
+               Checked="Autostart_Toggled" Unchecked="Autostart_Toggled"/>
+    </Grid>
+   </StackPanel>
+  </Border>
+
+  <Border Style="{StaticResource Card}">
+   <StackPanel>
+    <TextBlock Text="维护" Style="{StaticResource SectionTitle}"/>
+    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+     <Button x:Name="OpenFolderButton" Content="打开接收文件夹" Style="{StaticResource GhostButton}" Click="OpenFolder_Click"/>
+     <Button x:Name="DiagnosticsButton" Content="导出诊断包" Style="{StaticResource GhostButton}" Margin="10,0,0,0" Click="Diagnostics_Click"/>
+     <Button x:Name="CheckDriverButton" Content="检查网卡驱动" Style="{StaticResource GhostButton}" Margin="10,0,0,0" Click="CheckDriver_Click"/>
+    </StackPanel>
+    <TextBlock x:Name="MaintenanceResult" Style="{StaticResource RowHint}" MinHeight="17"/>
+   </StackPanel>
+  </Border>
+
+  <Grid Margin="0,8,0,0">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <!-- Fixed height: SizeToContent would otherwise make the window jump every
+        time a note appears or disappears. -->
+   <TextBlock x:Name="StatusText" Grid.Column="0" FontSize="12.5" Foreground="#8B97AC" VerticalAlignment="Center"
+              TextWrapping="Wrap" MinHeight="18" Margin="0,0,16,0"/>
+   <Button x:Name="DoneButton" Grid.Column="1" Content="完成" Style="{StaticResource PrimaryButton}" Click="Done_Click"/>
+  </Grid>
+ </StackPanel>
+ </Border>
+</Window>
