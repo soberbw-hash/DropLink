@@ -17,6 +17,8 @@ internal sealed class ReceiverSession : IAsyncDisposable
 
     public event Action<JsonElement>? EngineEvent;
     public event Action<string>? Failed;
+    // Forwarded from the chain so the UI can show which stage is running.
+    public event Action<string>? Stage;
 
     internal async Task StartAsync(
         ChainFiles files, IReadOnlyList<RadioDevice> devices, string selectedInstance,
@@ -30,6 +32,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
         {
             if (started || engine is not null) throw new InvalidOperationException("接收会话已启动。");
             chain.Failed += OnChainFailed;
+            chain.Stage += OnChainStage;
             // The device gate lives in BackendChain.StartAsync; it throws before
             // any engine process is created when no target can be proven.
             var addressFile = await chain.StartAsync(
@@ -69,6 +72,8 @@ internal sealed class ReceiverSession : IAsyncDisposable
 
     private void OnChainFailed(string message) => Failed?.Invoke(message);
 
+    private void OnChainStage(string message) => Stage?.Invoke(message);
+
     private async Task StopQuietlyAsync()
     {
         try { await StopAsync().ConfigureAwait(false); }
@@ -100,6 +105,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         chain.Failed -= OnChainFailed;
+        chain.Stage -= OnChainStage;
         await StopAsync().ConfigureAwait(false);
         await chain.DisposeAsync().ConfigureAwait(false);
     }

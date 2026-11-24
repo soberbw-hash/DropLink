@@ -118,6 +118,7 @@ public partial class MainWindow : Window
         var created = new ReceiverSession();
         created.EngineEvent += OnEngineEvent;
         created.Failed += OnSessionFailed;
+        created.Stage += OnSessionStage;
         session = created;
         try
         {
@@ -187,6 +188,15 @@ public partial class MainWindow : Window
         finally { restartScheduled = false; }
     }
 
+    // Chain stages arrive off the UI thread; a running transfer keeps the line.
+    private void OnSessionStage(string message) =>
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (!transientProgress) return;
+            ProgressText.Text = message;
+            ProgressPanel.Visibility = Visibility.Visible;
+        });
+
     // Engine facts are applied on the UI thread; an 'asked' event triggers an
     // explicit confirmation whose answer is sent back through the session.
     private void OnEngineEvent(JsonElement message)
@@ -197,6 +207,7 @@ public partial class MainWindow : Window
             RenderTransfer();
             if (!message.TryGetProperty("event", out var kind)) return;
             var name = kind.GetString();
+            if (name == "ready") AppLog.Mark("engine:ready");
             if (name == "receiving" && message.TryGetProperty("on", out var on))
                 tray?.SetReceiving(on.GetBoolean());
             if (name != "asked" || row is null) return;
@@ -370,6 +381,7 @@ public partial class MainWindow : Window
         // The radio needs ~45 s of firmware + RF init before the chain is up,
         // so say so instead of appearing frozen.
         ShowProgress("正在初始化网卡（约 40~60 秒），请不要关闭窗口…");
+        AppLog.Mark("session:start requested");
         try
         {
             var devices = await QueryRadioDevicesAsync();

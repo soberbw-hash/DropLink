@@ -58,6 +58,9 @@ internal sealed class EngineClient : IAsyncDisposable
             arguments.Add(arg);
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         var child = Process.Start(info) ?? throw new InvalidOperationException("Could not start receiver engine.");
+        // Keep the engine inside the host's job so it can never outlive us.
+        ProcessJob.Assign(child);
+        AppLog.Mark("engine:process started (pid " + child.Id + ")");
         return new EngineClient(child, eventReceived, exited);
     }
 
@@ -89,7 +92,13 @@ internal sealed class EngineClient : IAsyncDisposable
                         json.RootElement.TryGetProperty("event", out var value) && value.ValueKind == JsonValueKind.String)
                         eventReceived(json.RootElement.Clone());
                 }
-                catch (JsonException) { /* Ignore malformed output; never treat it as a success event. */ }
+                catch (JsonException)
+                {
+                    // Never treated as a success event, but never silently lost
+                    // either: an unparsable line is usually a Python traceback
+                    // that landed on stdout instead of stderr.
+                    AppLog.WriteEngineStderr("ipc: unparsable stdout line: " + Truncate(line));
+                }
             }
         }
         catch (IOException) { }
@@ -97,9 +106,18 @@ internal sealed class EngineClient : IAsyncDisposable
 
     private async Task DrainErrorsAsync()
     {
-        try { while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { } }
+        // stderr used to be consumed and thrown away, which is why a failed
+        // start only ever surfaced as one opaque sentence. Persist it instead.
+        try
+        {
+            while (await process.StandardError.ReadLineAsync().ConfigureAwait(false) is { Length: > 0 } line)
+                AppLog.WriteEngineStderr(line);
+        }
         catch (IOException) { }
     }
+
+    private static string Truncate(string line) =>
+        line.Length <= 500 ? line : line[..500] + "…";
 
     private async Task ObserveExitAsync()
     {

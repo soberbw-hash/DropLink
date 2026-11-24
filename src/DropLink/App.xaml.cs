@@ -16,6 +16,7 @@ public partial class App : System.Windows.Application
     protected override void OnStartup(StartupEventArgs e)
     {
         StartMinimized = e.Args.Contains("--tray", StringComparer.OrdinalIgnoreCase);
+        AppLog.Mark("app:start (tray=" + StartMinimized + ", elevated=" + Elevation.IsElevated() + ")");
         // Self-contained: derive backend/driver paths even if launched by
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
@@ -112,6 +113,9 @@ public partial class App : System.Windows.Application
         if (ownsChain)
         {
             try { BackendChain.KillStaleChain(); } catch (Exception) { /* best-effort */ }
+            // Closing the job is the kernel-level guarantee: anything that
+            // somehow survived the explicit cleanup dies here too.
+            try { ProcessJob.Shared?.Dispose(); } catch (Exception) { /* best-effort */ }
         }
         singleInstance?.Dispose();
         base.OnExit(e);

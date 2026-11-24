@@ -14,6 +14,19 @@ BINARIES = [
     'backend/python/python.exe',
 ]
 
+# Modules that come from the pinned upstream source, not from this repository.
+# The repo only carries the patched engine.py/receiver.py/transfer.py overlay, so
+# a source-only check cannot require them; an assembled package must have them or
+# the engine cannot even import (identity.py is the first failure).
+UPSTREAM_ENGINE_MODULES = [
+    'backend/airdrop/cpio.py',
+    'backend/airdrop/identity.py',
+    'backend/airdrop/mdns.py',
+    'backend/airdrop/netif.py',
+    'backend/airdrop/redact.py',
+    'backend/airdrop/sender.py',
+]
+
 REQUIRED = [
     'Start-DropLink.vbs',
     '启动 DropLink.cmd',
@@ -42,6 +55,8 @@ def main():
     args = parser.parse_args()
     root = args.portable.resolve()
     required = [item for item in REQUIRED if not (args.source_only and item in BINARIES)]
+    if not args.source_only:
+        required += UPSTREAM_ENGINE_MODULES
     errors = []
     warnings = []
     if not root.is_dir():

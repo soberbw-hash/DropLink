@@ -17,6 +17,9 @@ internal sealed class BackendChain : IAsyncDisposable
     private bool started;
     private string? sessionDirectory;
     public event Action<string>? Failed;
+    // Human-readable stage text, raised before each backend starts. The UI shows
+    // it so a 40-60 s init is not one opaque "正在初始化网卡" message.
+    public event Action<string>? Stage;
 
     // The caller must obtain current read-only device data, explicit authorization and recovery evidence.
     // This method must never be wired to an automatic startup or driver installation path.
@@ -57,19 +60,26 @@ internal sealed class BackendChain : IAsyncDisposable
             // The radio spends ~45 s on firmware + BB/RF init before it serves
             // its TCP port, so the budget is generous and readiness is also
             // confirmed by probing the port (see StartStage).
+            Stage?.Invoke("正在初始化无线电（固件与射频，约 40~60 秒）…");
+            AppLog.Mark("radio:start");
             await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
                 "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(150), cancel,
                 RadioListeningAsync).ConfigureAwait(false);
+            AppLog.Mark("radio:ready");
+            Stage?.Invoke("正在启动无线桥接…");
             await StartStage(files.Bridge, [], [], "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
+            AppLog.Mark("bridge:ready");
             // netd writes the local AWDL address into AWDL_NETD_ADDR_FILE and
             // proxies mDNS/DNS-SD. The engine then talks to netd instead of
             // binding an adapter — there is no awdl0 NIC on Windows (awdld only
             // reports that name), so a direct bind can never succeed.
+            Stage?.Invoke("正在建立 AWDL 链路…");
             var addressFile = Path.Combine(sessionDirectory, "awdl_netd.addr");
             await StartStage(files.Netd, [], new Dictionary<string, string?> {
                 ["AWDL_NETD_MDNS_PROXY"] = "1",
                 ["AWDL_NETD_ADDR_FILE"] = addressFile
             }, "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
+            AppLog.Mark("netd:ready");
             // awdld speaks to the radio over \\.\pipe\winawdl-radio and requires
             // a protocol-3 greeting. It can connect a moment before the greeting
             // arrives and then abort, so start it with a short retry loop rather
@@ -94,6 +104,7 @@ internal sealed class BackendChain : IAsyncDisposable
                     await Task.Delay(TimeSpan.FromSeconds(3), cancel).ConfigureAwait(false);
                 }
             }
+            Stage?.Invoke("正在等待无线链路就绪…");
             // netd publishes the address file once awdld has brought the link
             // up; starting the engine before that makes it wait on nothing.
             var addressDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
@@ -218,6 +229,9 @@ internal sealed class BackendChain : IAsyncDisposable
         };
         if (!child.Start()) { child.Dispose(); throw new InvalidOperationException("无法启动后端。"); }
         processes.Add(child);
+        // Belongs to the host's job: killed by the kernel if the host vanishes.
+        ProcessJob.Assign(child);
+        AppLog.Mark($"backend:started {Path.GetFileName(path)} pid={child.Id}");
         child.BeginOutputReadLine(); child.BeginErrorReadLine();
         // Readiness is accepted from either the log line or a live probe. The
         // probe exists because the log wording/level is not contractual: the
@@ -239,6 +253,7 @@ internal sealed class BackendChain : IAsyncDisposable
         }
         await readySignal.Task.ConfigureAwait(false);
         if (child.HasExited) throw new InvalidOperationException("后端就绪后立即退出。");
+        AppLog.Mark($"backend:ready {Path.GetFileName(path)}");
     }
 
     // The four backends outlive their parent if the host is killed, logged off or
@@ -248,9 +263,25 @@ internal sealed class BackendChain : IAsyncDisposable
     // else can clean them up: they run elevated, so only the (elevated) app can.
     internal static int KillStaleChain()
     {
+        // Never kill by name alone: another DropLink install (or an unrelated
+        // program with the same file name) would be destroyed. Only processes
+        // whose executable lives under this installation's root are ours.
+        var root = InstallRoot();
+        if (root is null)
+        {
+            AppLog.Write("stale chain cleanup skipped: cannot determine install root");
+            return 0;
+        }
+
         var killed = 0;
         // Reverse start order so the radio is last.
-        foreach (var name in new[] { "awdld", "awdl_netd", "radio_pipe_bridge", "airbridge_radio" })
+        var names = new List<string> { "awdld", "awdl_netd", "radio_pipe_bridge", "airbridge_radio" };
+        // The receiver engine is the bundled interpreter, never the system one.
+        var bundledPython = Environment.GetEnvironmentVariable("DROPLINK_PYTHON");
+        if (!string.IsNullOrWhiteSpace(bundledPython))
+            names.Add(Path.GetFileNameWithoutExtension(bundledPython));
+
+        foreach (var name in names.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             Process[] found;
             try { found = Process.GetProcessesByName(name); }
@@ -259,28 +290,7 @@ internal sealed class BackendChain : IAsyncDisposable
             {
                 try
                 {
-                    process.Kill(true);
-                    process.WaitForExit(3000);
-                    killed++;
-                }
-                catch (Exception) { /* already gone or access denied */ }
-                finally { process.Dispose(); }
-            }
-        }
-        // The receiver engine is the bundled interpreter, never the system one:
-        // match on the exact executable path so a user's own python is safe.
-        var bundledPython = Environment.GetEnvironmentVariable("DROPLINK_PYTHON");
-        if (!string.IsNullOrWhiteSpace(bundledPython))
-        {
-            Process[] pythons;
-            try { pythons = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(bundledPython)); }
-            catch (Exception) { pythons = []; }
-            foreach (var process in pythons)
-            {
-                try
-                {
-                    if (!string.Equals(process.MainModule?.FileName, bundledPython, StringComparison.OrdinalIgnoreCase))
-                        continue;
+                    if (!BelongsTo(root, process)) continue;
                     process.Kill(true);
                     process.WaitForExit(3000);
                     killed++;
@@ -290,6 +300,28 @@ internal sealed class BackendChain : IAsyncDisposable
             }
         }
         return killed;
+    }
+
+    // The folder that contains backend\ (and app\), derived from the host exe.
+    private static string? InstallRoot()
+    {
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exe)) return null;
+        var appDirectory = Path.GetDirectoryName(exe);
+        if (string.IsNullOrWhiteSpace(appDirectory)) return null;
+        return Directory.GetParent(appDirectory)?.FullName ?? appDirectory;
+    }
+
+    private static bool BelongsTo(string root, Process process)
+    {
+        try
+        {
+            var path = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            var prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception) { return false; }
     }
 
     internal async Task StopAsync()
