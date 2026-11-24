@@ -26,15 +26,66 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ApplyWindowIcon();
         // Auto-check on launch so the guide is useful the moment the window opens.
         Loaded += async (_, _) => await InitializeAsync();
-        StateChanged += OnStateChanged;
         Closing += OnClosing;
-        Closed += async (_, _) => await CloseSessionAsync();
+        Closed += async (_, _) =>
+        {
+            // The tray must never outlive the window. A notification-area icon
+            // whose window is gone is the "ghost app" the user could not get
+            // rid of: it looks alive, answers nothing, and only disappears
+            // when the mouse happens to pass over it.
+            tray?.Dispose();
+            tray = null;
+            await CloseSessionAsync();
+        };
         // Windows logoff/shutdown must not be blocked by close-to-tray.
         System.Windows.Application.Current.SessionEnding += (_, _) => exitRequested = true;
         // Create the tray before the first Show so autostart can stay hidden.
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
+    }
+
+    // The title bar and the taskbar button both take the window icon. WPF falls
+    // back to the executable's icon when this is unset, but "falls back" is the
+    // kind of assumption that makes an icon change look like it did not happen,
+    // so the same app.ico the exe carries is applied explicitly. A failure here
+    // must not stop the receiver from starting.
+    private void ApplyWindowIcon()
+    {
+        try
+        {
+            using var stream = typeof(MainWindow).Assembly.GetManifestResourceStream("app.ico");
+            if (stream is not null)
+            {
+                // Pick the largest frame: the first one is 16x16, which looks
+                // soft in the title bar at 100% scaling.
+                var decoder = System.Windows.Media.Imaging.BitmapDecoder.Create(
+                    stream,
+                    System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                Icon = decoder.Frames.OrderByDescending(f => f.PixelWidth).First();
+                return;
+            }
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("window icon from resource failed: " + error.Message);
+        }
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(path)) return;
+            using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(path);
+            if (extracted is null) return;
+            Icon = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                extracted.Handle, System.Windows.Int32Rect.Empty,
+                System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("window icon from exe failed: " + error.Message);
+        }
     }
 
     // Runs once whether the window is shown or not. A tray-only launch calls
@@ -43,6 +94,7 @@ public partial class MainWindow : Window
     {
         if (initialized) return;
         initialized = true;
+        SetStatus(LinkStatus.Working, "正在检查设备…");
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
         await CheckReadinessAsync();
         if (session is not null) return;
@@ -64,8 +116,7 @@ public partial class MainWindow : Window
         // Tell the user it is live, otherwise a silent logon start is invisible.
         if (session is not null && !IsVisible)
             tray?.Notify("DropLink 已在后台接收",
-                "iPhone 隔空投送里选这台电脑就能投，收到文件会在右下角提示。");
-    }
+                "iPhone 隔空投送里选这台电脑就能投，收到文件会在右下角提示。");    }
 
     private void EnsureTray() => tray ??= new TrayIcon(this, RequestExit);
 
@@ -81,25 +132,74 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnStateChanged(object? sender, EventArgs e)
+    // The one place that decides what the app claims about itself. The dot and
+    // line in the header, the window title (which is also the taskbar button's
+    // tooltip) and the tray tooltip all read from here, so they cannot end up
+    // disagreeing about whether anything is running.
+    private enum LinkStatus { Idle, Working, Ready, Receiving, Failed }
+
+    private void SetStatus(LinkStatus kind, string text, string hint = "")
     {
-        if (WindowState == WindowState.Minimized && tray is not null) tray.HideWindow();
+        var color = kind switch
+        {
+            LinkStatus.Receiving => System.Windows.Media.Color.FromRgb(0x1B, 0x6E, 0x4A),
+            LinkStatus.Ready => System.Windows.Media.Color.FromRgb(0x2C, 0x6B, 0xED),
+            LinkStatus.Working => System.Windows.Media.Color.FromRgb(0xC2, 0x7A, 0x12),
+            LinkStatus.Failed => System.Windows.Media.Color.FromRgb(0xB2, 0x3A, 0x48),
+            _ => System.Windows.Media.Color.FromRgb(0x95, 0xA1, 0xB5)
+        };
+        StatusDot.Fill = new System.Windows.Media.SolidColorBrush(color);
+        StatusText.Text = text;
+        StatusText.Foreground = new System.Windows.Media.SolidColorBrush(kind == LinkStatus.Idle
+            ? System.Windows.Media.Color.FromRgb(0x52, 0x62, 0x7C)
+            : color);
+        StatusHint.Text = hint;
+        StatusHint.Visibility = string.IsNullOrEmpty(hint) ? Visibility.Collapsed : Visibility.Visible;
+        Title = "DropLink · " + text;
+        tray?.SetStatus(text);
+    }
+
+    // "未在接收" on its own only restates the problem, so the hint says which
+    // of the three setup steps is still open.
+    private void SetIdleStatus()
+    {
+        var (hint, kind) = currentStep switch
+        {
+            GuideStep.SwitchDriver => ("网卡还在原厂驱动上，第 1 步没做完", LinkStatus.Idle),
+            GuideStep.Rescan => ("网卡已换好驱动，还差拔插重扫", LinkStatus.Idle),
+            GuideStep.NeedRestart => ("重新打开一次 DropLink 就会继续", LinkStatus.Idle),
+            GuideStep.EnvironmentBlocked => ("后端组件缺失，见下方详细信息", LinkStatus.Failed),
+            GuideStep.StartReceiving => ("条件已满足，正在自动开启…", LinkStatus.Working),
+            _ => ("", LinkStatus.Idle)
+        };
+        SetStatus(kind, "未在接收", hint);
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (exitRequested) return;
-        // If the tray could not be created, let the window close normally
-        // instead of hiding it with no way to bring it back.
-        if (tray is null) { exitRequested = true; return; }
+        // Closing the window used to hide it in the tray, so × did not do what ×
+        // does everywhere else: the receiver kept running with nothing on screen
+        // saying so. × now quits; the tray is a shortcut, not a hiding place.
+        if (transferState.Items.Any(row => row.Receiving && !row.Finished))
+        {
+            var answer = MessageBox.Show(this,
+                "正在接收文件。现在退出会中断这次传输。\n\n仍要退出？",
+                "退出 DropLink", MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) { e.Cancel = true; return; }
+        }
+        // One exit path. Shutdown closes this window again with exitRequested
+        // set, so this does not recurse.
         e.Cancel = true;
-        tray.HideWindow();
+        RequestExit();
     }
 
     private async void RequestExit()
     {
         if (exitRequested) return;
         exitRequested = true;
+        SetStatus(LinkStatus.Idle, "正在退出…");
         try { await CloseSessionAsync(); }
         catch (Exception) { /* exit anyway */ }
         tray?.Dispose();
@@ -147,12 +247,19 @@ public partial class MainWindow : Window
     private void OnSessionFailed(string message) =>
         _ = Dispatcher.BeginInvoke(async () =>
         {
+            // Already shutting down: a modal box here would hold the process
+            // open after the user asked it to close.
+            if (exitRequested) return;
             // A background receiver has no visible window to point at; a modal
             // box at logon would be worse than a tray notice.
             if (!IsVisible) tray?.Notify("DropLink 接收链路异常", message);
             else MessageBox.Show(this, message, "接收链路异常", MessageBoxButton.OK, MessageBoxImage.Warning);
             try { await CloseSessionAsync(); await CheckReadinessAsync(); }
             catch (Exception) { /* refresh is best-effort */ }
+            // The refresh above would report a calm "未在接收"; the reason is
+            // what the user needs to see, and it is the only thing that makes
+            // the automatic retry below understandable.
+            SetStatus(LinkStatus.Failed, "接收中断", message);
             // Bring the receiver back by itself: the point of running in the
             // tray is that the user never has to notice it stopped.
             ScheduleRestart(message);
@@ -208,6 +315,7 @@ public partial class MainWindow : Window
     private async Task WaitForDeviceThenStartAsync()
     {
         AppLog.Write("waiting for a usable radio; recovery is paused, not failing");
+        SetStatus(LinkStatus.Idle, "未在接收", "在等网卡插回来，插上会自动恢复，不用管它");
         while (!exitRequested && session is null)
         {
             await Task.Delay(TimeSpan.FromSeconds(60));
@@ -225,6 +333,7 @@ public partial class MainWindow : Window
         _ = Dispatcher.BeginInvoke(() =>
         {
             lastStage = message;
+            SetStatus(LinkStatus.Working, message.TrimEnd('…', '.', ' '), "网卡初始化中，完成后会自动开始接收");
             if (!transientProgress) return;
             ProgressText.Text = message;
             ProgressPanel.Visibility = Visibility.Visible;
@@ -235,6 +344,7 @@ public partial class MainWindow : Window
         _ = Dispatcher.BeginInvoke(() =>
         {
             AppLog.Write("notice: " + message);
+            SetStatus(LinkStatus.Working, message.TrimEnd('…', '.', ' '));
             if (IsVisible)
             {
                 if (transientProgress) ProgressText.Text = message;
@@ -254,8 +364,22 @@ public partial class MainWindow : Window
             if (!message.TryGetProperty("event", out var kind)) return;
             var name = kind.GetString();
             if (name == "ready") AppLog.Mark("engine:ready");
+            if (name == "ready")
+                SetStatus(LinkStatus.Ready, "已就绪，正在打开接收端口…");
+            // 'receiving' is the moment an iPhone can actually see this PC, so
+            // it is the state the header should be showing all day. The port
+            // comes from the engine; without it the line is just a guess.
             if (name == "receiving" && message.TryGetProperty("on", out var on))
-                tray?.SetReceiving(on.GetBoolean());
+            {
+                var live = on.ValueKind == JsonValueKind.True;
+                var port = message.TryGetProperty("port", out var p) && p.TryGetInt32(out var n) ? n : 0;
+                if (live)
+                    SetStatus(LinkStatus.Receiving, "正在接收",
+                        (port > 0 ? $"端口 {port} · " : "") + "在 iPhone 隔空投送里选这台电脑");
+                else
+                    SetStatus(LinkStatus.Ready, "已就绪，接收端口没开",
+                        "iPhone 看不到这台电脑时，点下方详细信息看原因");
+            }
             if (name != "asked" || row is null) return;
             var answer = MessageBox.Show(this, $"{row.Sender} 想发送：\n{row.Files}\n\n是否接收？",
                 "接收请求", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
@@ -282,6 +406,9 @@ public partial class MainWindow : Window
     private async Task CheckReadinessAsync()
     {
         GuideTitle.Text = "正在检查设备与驱动…";
+        // A refresh is not a state change: a live session keeps its own line
+        // instead of flickering back to "checking" every time the guide runs.
+        if (session is null) SetStatus(LinkStatus.Working, "正在检查设备…");
         try
         {
             var devices = await QueryRadioDevicesAsync();
@@ -310,12 +437,16 @@ public partial class MainWindow : Window
             if (pnp is not null && target is null && !legacy)
                 report += "\n  ✗ 已找到 WinUSB 网卡，但无法按 USB 端口映射到 libusb 设备（可拔插后重扫）。";
             ReceiveStatus.Text = report;
+            // The guide has spoken, so the header can too: when nothing runs,
+            // say why instead of leaving the last busy message on screen.
+            if (session is null) SetIdleStatus();
         }
         catch (Exception ex)
         {
             GuideStepLabel.Text = "检查失败";
             GuideTitle.Text = "自动检查没有完成";
             GuideDetail.Text = ex.Message;
+            SetStatus(LinkStatus.Failed, "检查失败", ex.Message);
         }
     }
 
@@ -424,9 +555,11 @@ public partial class MainWindow : Window
     // BackendChain, whose ValidatedTargetSelection() safety lock stays closed.
     private async Task StartReceiveAsync(bool silent)
     {
+        if (exitRequested) return;
         // The radio needs ~45 s of firmware + RF init before the chain is up,
         // so say so instead of appearing frozen.
         ShowProgress("正在初始化网卡（约 40~60 秒），请不要关闭窗口…");
+        SetStatus(LinkStatus.Working, "正在初始化网卡", "约 40~60 秒，完成后自动开始接收");
         AppLog.Mark("session:start requested");
         try
         {
@@ -457,6 +590,9 @@ public partial class MainWindow : Window
             // what made the next click report "接收会话已经启动" while no backend
             // process was actually running.
             await CloseSessionAsync();
+            // The user asked to quit while the chain was still coming up: there
+            // is nothing worth reporting to a window that is already closing.
+            if (exitRequested) return;
             // Layered error: which stage, what happened, where to look. One
             // opaque sentence is what made every past failure a guessing game.
             var stage = string.IsNullOrWhiteSpace(lastStage)
@@ -472,6 +608,7 @@ public partial class MainWindow : Window
             GuideTitle.Text = $"接收没有启动起来（{stage}）";
             GuideDetail.Text = ex.Message + "\n详细日志：data\\logs\\app.log";
             ShowDetails(reason, expand: true); // keep the reason visible after the refresh
+            SetStatus(LinkStatus.Failed, "接收没有启动", $"{stage}：{ex.Message}");
             // A hidden receiver must not open a modal box at logon; the tray is
             // the only thing the user can see, so report it there.
             if (silent) tray?.Notify("DropLink 没能开始接收", ex.Message);

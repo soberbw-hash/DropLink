@@ -52,7 +52,7 @@ internal static class SetupGuide
             return new SetupGuideResult(
                 GuideStep.NeedRestart, "准备阶段",
                 "需要重新打开",
-                "托盘右键退出 DropLink，再双击启动脚本打开。",
+                "点右上角 × 退出 DropLink，再双击启动脚本打开。",
                 "重新检查", true);
 
         if (input.SessionRunning)

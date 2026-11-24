@@ -8,18 +8,22 @@ using MessageBox = System.Windows.MessageBox;
 namespace DropLink;
 
 /// <summary>
-/// Keeps DropLink alive in the notification area. Closing or minimizing the
-/// window hides it instead of ending the receiver; only the tray menu exits.
+/// A shortcut and a status readout next to the clock. It no longer hides the
+/// window: closing the window quits DropLink, and minimizing leaves it in the
+/// taskbar where a normal program belongs.
 /// </summary>
 internal sealed class TrayIcon : IDisposable
 {
     private readonly Window window;
     private readonly Forms.NotifyIcon icon;
-    private bool balloonShown;
+    private readonly Forms.ToolStripMenuItem statusItem;
 
     public TrayIcon(Window window, Action exit)
     {
         this.window = window;
+        // The first item restates the header, so a right-click answers "还在收吗"
+        // without opening anything. It is disabled: it is a readout, not a verb.
+        statusItem = new Forms.ToolStripMenuItem("状态：正在启动") { Enabled = false };
         var menu = new Forms.ContextMenuStrip { ShowImageMargin = false };
         var open = new Forms.ToolStripMenuItem("打开主界面");
         open.Click += (_, _) => ShowWindow();
@@ -31,6 +35,8 @@ internal sealed class TrayIcon : IDisposable
         diagnostics.Click += (_, _) => ExportDiagnostics();
         var quit = new Forms.ToolStripMenuItem("退出 DropLink");
         quit.Click += (_, _) => exit();
+        menu.Items.Add(statusItem);
+        menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(open);
         menu.Items.Add(settings);
         menu.Items.Add(folder);
@@ -41,7 +47,7 @@ internal sealed class TrayIcon : IDisposable
         icon = new Forms.NotifyIcon
         {
             Icon = LoadIcon(),
-            Text = "DropLink - 隔空投送接收器",
+            Text = "DropLink · 正在启动",
             Visible = true,
             ContextMenuStrip = menu
         };
@@ -58,21 +64,21 @@ internal sealed class TrayIcon : IDisposable
         window.Focus();
     }
 
-    public void HideWindow()
+    /// <summary>
+    /// Mirrors the header line. NotifyIcon.Text is capped by the shell and going
+    /// over throws rather than truncating, so the text is shortened here - a
+    /// tray tooltip that silently stops updating would be its own small lie.
+    /// </summary>
+    public void SetStatus(string status)
     {
-        window.Hide();
-        if (balloonShown) return;
-        balloonShown = true;
-        try
-        {
-            icon.ShowBalloonTip(3000, "DropLink 还在后台",
-                "窗口已收到托盘。双击托盘图标可以重新打开。", Forms.ToolTipIcon.Info);
-        }
-        catch (Exception) { /* balloons are best-effort */ }
+        const string prefix = "DropLink · ";
+        var room = 63 - prefix.Length;
+        var tip = status.Length <= room ? status : status[..(room - 1)] + "…";
+        try { icon.Text = prefix + tip; }
+        catch (Exception) { /* keep the previous tooltip */ }
+        try { statusItem.Text = "状态：" + status; }
+        catch (Exception) { /* keep the previous menu text */ }
     }
-
-    public void SetReceiving(bool on) =>
-        icon.Text = on ? "DropLink - 正在接收" : "DropLink - 隔空投送接收器";
 
     /// <summary>A background receiver reports problems here instead of a modal box.</summary>
     public void Notify(string title, string text)
@@ -83,22 +89,26 @@ internal sealed class TrayIcon : IDisposable
 
     private static Icon LoadIcon()
     {
-        // Prefer the embedded multi-size icon so the tray gets a crisp 16x16.
+        // The embedded multi-size icon is what gives the tray a crisp 16x16.
+        // It has to come from the manifest resource: a .ico declared as a WPF
+        // Resource is dropped by the resources generator, which is why this
+        // branch used to fail silently and fall through to the executable icon.
         try
         {
-            var res = System.Windows.Application.GetResourceStream(new Uri("app.ico", UriKind.Relative));
-            if (res is not null)
-            {
-                using var stream = res.Stream;
-                return new Icon(stream, new System.Drawing.Size(16, 16));
-            }
+            using var stream = typeof(TrayIcon).Assembly.GetManifestResourceStream("app.ico");
+            if (stream is not null) return new Icon(stream, new System.Drawing.Size(16, 16));
         }
-        catch (Exception) { /* fall through to the executable icon */ }
+        catch (Exception) { /* fall through */ }
+        // Published builds also ship app\DropLink.ico next to the exe.
         try
         {
             var path = Environment.ProcessPath;
             if (!string.IsNullOrWhiteSpace(path))
+            {
+                var shipped = Path.Combine(Path.GetDirectoryName(path)!, "DropLink.ico");
+                if (File.Exists(shipped)) return new Icon(shipped, new System.Drawing.Size(16, 16));
                 return Icon.ExtractAssociatedIcon(path) ?? SystemIcons.Application;
+            }
         }
         catch (Exception) { /* fall back to the stock icon */ }
         return SystemIcons.Application;

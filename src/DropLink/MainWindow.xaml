@@ -1,6 +1,15 @@
 <Window x:Class="DropLink.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="DropLink" Width="800" SizeToContent="Height" MaxHeight="780" MinWidth="700" MinHeight="360" ShowInTaskbar="True" WindowStartupLocation="CenterScreen" Background="#F5F7FB" FontFamily="{StaticResource AppFont}">
  <Grid Margin="40,28,40,24"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <StackPanel><TextBlock Text="DropLink" FontSize="26" FontWeight="Medium" Foreground="#17233C"/><TextBlock Text="把 iPhone 的照片和文件隔空投送到这台电脑" Foreground="#66758D" Margin="0,5,0,0"/></StackPanel>
+  <StackPanel><TextBlock Text="DropLink" FontSize="26" FontWeight="Medium" Foreground="#17233C"/><TextBlock Text="把 iPhone 的照片和文件隔空投送到这台电脑" Foreground="#66758D" Margin="0,5,0,0"/>
+   <!-- The state line. It is outside the card on purpose: the card's content
+        changes with the setup step, but "am I receiving right now" has to be
+        readable at any moment, including from the taskbar after minimizing. -->
+   <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+    <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#B6C0D0" VerticalAlignment="Center"/>
+    <TextBlock x:Name="StatusText" Text="正在启动…" FontSize="13" FontWeight="Medium" Foreground="#52627C" Margin="8,0,0,0" VerticalAlignment="Center"/>
+    <TextBlock x:Name="StatusHint" Text="" FontSize="12" Foreground="#93A0B4" Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="520"/>
+   </StackPanel>
+  </StackPanel>
 
   <!-- One card, one instruction. Nothing here scrolls away: the window is
        sized so the title, the action and the diagnostics are always visible. -->

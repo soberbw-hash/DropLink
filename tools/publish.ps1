@@ -37,7 +37,19 @@ $exe = Join-Path $stage 'DropLink.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw ('missing ' + $exe) }
 
 if (-not (Test-Path -LiteralPath $Target)) { New-Item -ItemType Directory -Path $Target -Force | Out-Null }
-Copy-Item -LiteralPath $exe -Destination (Join-Path $Target 'DropLink.exe') -Force
+$dest = Join-Path $Target 'DropLink.exe'
+try {
+    Copy-Item -LiteralPath $exe -Destination $dest -Force
+} catch {
+    # A running DropLink holds its own image, so the copy fails. That used to be
+    # worked around by renaming the old exe to .old, which left the user clicking
+    # a stale build and wondering why nothing changed. Refuse loudly instead:
+    # a publish that does not land is worse than no publish at all.
+    $pids = @(Get-Process -Name 'DropLink' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    $who = ''
+    if ($pids.Count -gt 0) { $who = ' (running pid ' + ($pids -join ', ') + ')' }
+    throw ('cannot replace ' + $dest + ': DropLink is running' + $who + '. Quit DropLink first, then publish again.')
+}
 
 # Ship the icon next to the executable, not only inside it. The .ico is what a
 # shortcut or a dock needs, and the source PNG is the design file: if either
