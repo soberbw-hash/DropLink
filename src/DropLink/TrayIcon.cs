@@ -90,16 +90,43 @@ internal sealed class TrayIcon : IDisposable
         catch (Exception) { /* balloons are best-effort */ }
     }
 
+    /// <summary>
+    /// The tray slot in physical pixels. WinForms knows the answer, but its DPI
+    /// context is not always initialised in a WPF process and a stale 16 there
+    /// is exactly the bug being fixed - so the display scale is also asked
+    /// directly and the larger of the two wins.
+    /// </summary>
+    private static System.Drawing.Size TrayIconSize()
+    {
+        var slot = Forms.SystemInformation.SmallIconSize;
+        try
+        {
+            using var graphics = Graphics.FromHwnd(IntPtr.Zero);
+            var scaled = (int)Math.Round(16 * graphics.DpiX / 96.0);
+            if (scaled > slot.Width) slot = new System.Drawing.Size(scaled, scaled);
+        }
+        catch (Exception) { /* keep whatever WinForms said */ }
+        if (slot.Width < 16 || slot.Height < 16) slot = new System.Drawing.Size(16, 16);
+        return slot;
+    }
+
     private static Icon LoadIcon()
     {
-        // The embedded multi-size icon is what gives the tray a crisp 16x16.
+        // The embedded multi-size icon is what gives the tray a crisp icon.
         // It has to come from the manifest resource: a .ico declared as a WPF
         // Resource is dropped by the resources generator, which is why this
         // branch used to fail silently and fall through to the executable icon.
+        //
+        // The size is not fixed at 16. The tray slot is measured in physical
+        // pixels and follows the display scale (16 at 100%, 24 at 150%, 32 at
+        // 200%), so asking for 16 made the shell draw a 16px bitmap inside a
+        // 24px slot: the icon sat visibly smaller than the apps next to it.
+        var slot = TrayIconSize();
+        AppLog.Write($"tray icon requested at {slot.Width}x{slot.Height}");
         try
         {
             using var stream = typeof(TrayIcon).Assembly.GetManifestResourceStream("app.ico");
-            if (stream is not null) return new Icon(stream, new System.Drawing.Size(16, 16));
+            if (stream is not null) return new Icon(stream, slot);
         }
         catch (Exception) { /* fall through */ }
         // Published builds also ship app\DropLink.ico next to the exe.
@@ -109,7 +136,7 @@ internal sealed class TrayIcon : IDisposable
             if (!string.IsNullOrWhiteSpace(path))
             {
                 var shipped = Path.Combine(Path.GetDirectoryName(path)!, "DropLink.ico");
-                if (File.Exists(shipped)) return new Icon(shipped, new System.Drawing.Size(16, 16));
+                if (File.Exists(shipped)) return new Icon(shipped, slot);
                 return Icon.ExtractAssociatedIcon(path) ?? SystemIcons.Application;
             }
         }

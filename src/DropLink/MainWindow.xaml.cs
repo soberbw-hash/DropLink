@@ -295,6 +295,16 @@ public partial class MainWindow : Window
         if (exitRequested) return;
         exitRequested = true;
         SetStatus(LinkStatus.Idle, "正在退出…");
+        // Last resort: a shutdown that hangs on a wedged backend or a tray that
+        // will not let go leaves a process with no window and no way back in -
+        // the single-instance lock then makes every later launch do nothing.
+        // That is the "I closed it and it is still running" complaint again, so
+        // the process is forced out if the orderly path has not finished.
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(6));
+            Environment.Exit(0);
+        });
         try { await CloseSessionAsync(); }
         catch (Exception) { /* exit anyway */ }
         tray?.Dispose();
