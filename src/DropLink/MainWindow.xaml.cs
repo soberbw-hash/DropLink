@@ -188,7 +188,7 @@ public partial class MainWindow : Window
             var target = await Task.Run(() => DeviceInventory.Read(Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? ""));
             var (pnp, selectedTarget) = PickTarget(devices, target);
             if (pnp is null || selectedTarget is null)
-                throw new InvalidOperationException("无法定位目标网卡：需要至少一块 0BDA:C811 已绑定 WinUSB 且能被 libusb 按 USB 端口识别。请先运行“一键换WinUSB.cmd”换驱动，再点“检查接收条件”。");
+                throw new InvalidOperationException("无法定位目标网卡：需要至少一块 0BDA:C811 已绑定 WinUSB 且能被 libusb 按 USB 端口识别。请点上方主按钮“一键换 WinUSB”完成换驱动，然后重新检查。");
             var files = new ChainFiles(
                 Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "",
                 Environment.GetEnvironmentVariable("DROPLINK_BRIDGE_EXE") ?? "",
