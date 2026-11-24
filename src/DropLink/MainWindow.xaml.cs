@@ -590,6 +590,9 @@ public partial class MainWindow : Window
         SetBusy(state == UiState.Preparing);
         SetBreathe(state == UiState.Preparing);
         SetDotPulse(state == UiState.Preparing);
+        // While bytes are moving the panel is the progress block; keeping the
+        // mark above it would put two focal points in the same area.
+        MarkHost.Visibility = state == UiState.Transferring ? Visibility.Collapsed : Visibility.Visible;
 
         var headline = state switch
         {

@@ -81,74 +81,85 @@
     </Button>
    </Grid>
 
-   <!-- ── B. status: exactly one of these is visible ───────────────────── -->
+   <!-- ── B. status: exactly one panel is visible ───────────────────────── -->
+   <!-- The air mark lives once, above the panels, so every state has the same
+        visual anchor. It used to sit inside the idle panel only, which left a
+        blank block at the top of the confirm/paused/failed screens and made
+        them look like something had failed to load. -->
    <Grid Grid.Row="1" Margin="28,4,28,10">
+    <Grid.RowDefinitions>
+     <RowDefinition Height="Auto"/>
+     <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
 
-    <!-- Waiting / preparing / done -->
-    <StackPanel x:Name="IdlePanel" VerticalAlignment="Center">
-     <Grid Height="112" HorizontalAlignment="Center">
-      <Viewbox x:Name="MarkGroup" Width="112" Height="98" VerticalAlignment="Center">
-       <Canvas Width="160" Height="140">
-        <Path Data="{StaticResource AirMarkOuter}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-        <Path Data="{StaticResource AirMarkMiddle}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-        <Path Data="{StaticResource AirMarkInner}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-        <Ellipse Canvas.Left="74.5" Canvas.Top="70.5" Width="11" Height="11" Fill="{StaticResource Brand}"/>
-       </Canvas>
-      </Viewbox>
-      <!-- Busy ring, only while the radio is actually being brought up. -->
-      <Grid x:Name="Spinner" Width="96" Height="96" Visibility="Collapsed">
-       <Ellipse Stroke="{StaticResource Divider}" StrokeThickness="2.5"/>
-       <Ellipse Stroke="{StaticResource Brand}" StrokeThickness="2.5" StrokeDashArray="4 14" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
-        <Ellipse.RenderTransform><RotateTransform x:Name="SpinAngle"/></Ellipse.RenderTransform>
-       </Ellipse>
+    <Grid x:Name="MarkHost" Grid.Row="0" Height="112" HorizontalAlignment="Center">
+     <Viewbox x:Name="MarkGroup" Width="112" Height="98" VerticalAlignment="Center">
+      <Canvas Width="160" Height="140">
+       <Path Data="{StaticResource AirMarkOuter}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       <Path Data="{StaticResource AirMarkMiddle}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       <Path Data="{StaticResource AirMarkInner}" Stroke="{StaticResource Brand}" StrokeThickness="7" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       <Ellipse Canvas.Left="74.5" Canvas.Top="70.5" Width="11" Height="11" Fill="{StaticResource Brand}"/>
+      </Canvas>
+     </Viewbox>
+     <!-- Busy ring, only while the radio is actually being brought up. -->
+     <Grid x:Name="Spinner" Width="96" Height="96" Visibility="Collapsed">
+      <Ellipse Stroke="{StaticResource Divider}" StrokeThickness="2.5"/>
+      <Ellipse Stroke="{StaticResource Brand}" StrokeThickness="2.5" StrokeDashArray="4 14" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
+       <Ellipse.RenderTransform><RotateTransform x:Name="SpinAngle"/></Ellipse.RenderTransform>
+      </Ellipse>
+     </Grid>
+    </Grid>
+
+    <Grid Grid.Row="1">
+     <!-- Waiting / preparing / done -->
+     <StackPanel x:Name="IdlePanel" VerticalAlignment="Center">
+      <TextBlock x:Name="IdleTitle" Text="等待接收" Style="{StaticResource StatusTitle}"/>
+      <TextBlock x:Name="IdleLine" Text="在 iPhone 的隔空投送中选择" Style="{StaticResource BodyText}"
+                 HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+      <TextBlock x:Name="IdleDevice" Text="" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"
+                 HorizontalAlignment="Center" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+       <Ellipse x:Name="ReadyDot" Width="6" Height="6" Fill="{StaticResource Success}" VerticalAlignment="Center"/>
+       <TextBlock x:Name="ReadyLine" Text="接收服务已就绪" Style="{StaticResource Caption}" Margin="7,0,0,0" VerticalAlignment="Center"/>
+      </StackPanel>
+     </StackPanel>
+
+     <!-- Receiving / saving -->
+     <StackPanel x:Name="TransferPanel" VerticalAlignment="Center" Visibility="Collapsed">
+      <TextBlock x:Name="TransferHeadline" Text="正在接收" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"/>
+      <TextBlock x:Name="TransferFrom" Text="" Style="{StaticResource BodyText}" Margin="0,3,0,0"/>
+      <TextBlock x:Name="TransferPercent" Text="0%" FontSize="34" FontWeight="Medium" Foreground="{StaticResource TextPrimary}" Margin="0,10,0,0"/>
+      <ProgressBar x:Name="TransferBar" Style="{StaticResource TransferBar}" Margin="0,6,0,0"/>
+      <Grid Margin="0,8,0,0">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+       <TextBlock x:Name="TransferReceived" Grid.Column="0" Style="{StaticResource Caption}"/>
+       <TextBlock x:Name="TransferRemaining" Grid.Column="1" Style="{StaticResource Caption}"/>
       </Grid>
-     </Grid>
-     <TextBlock x:Name="IdleTitle" Text="等待接收" Style="{StaticResource StatusTitle}" Margin="0,14,0,0"/>
-     <TextBlock x:Name="IdleLine" Text="在 iPhone 的隔空投送中选择" Style="{StaticResource BodyText}"
-                HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
-     <TextBlock x:Name="IdleDevice" Text="" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"
-                HorizontalAlignment="Center" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" MaxWidth="300"/>
-     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
-      <Ellipse x:Name="ReadyDot" Width="6" Height="6" Fill="{StaticResource Success}" VerticalAlignment="Center"/>
-      <TextBlock x:Name="ReadyLine" Text="接收服务已就绪" Style="{StaticResource Caption}" Margin="7,0,0,0" VerticalAlignment="Center"/>
+      <TextBlock x:Name="TransferNote" Text="" Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"/>
      </StackPanel>
-    </StackPanel>
 
-    <!-- Receiving / saving -->
-    <StackPanel x:Name="TransferPanel" VerticalAlignment="Center" Visibility="Collapsed">
-     <TextBlock x:Name="TransferHeadline" Text="正在接收" FontSize="15" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"/>
-     <TextBlock x:Name="TransferFrom" Text="" Style="{StaticResource BodyText}" Margin="0,3,0,0"/>
-     <TextBlock x:Name="TransferPercent" Text="0%" FontSize="34" FontWeight="Medium" Foreground="{StaticResource TextPrimary}" Margin="0,10,0,0"/>
-     <ProgressBar x:Name="TransferBar" Style="{StaticResource TransferBar}" Margin="0,6,0,0"/>
-     <Grid Margin="0,8,0,0">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <TextBlock x:Name="TransferReceived" Grid.Column="0" Style="{StaticResource Caption}"/>
-      <TextBlock x:Name="TransferRemaining" Grid.Column="1" Style="{StaticResource Caption}"/>
-     </Grid>
-     <TextBlock x:Name="TransferNote" Text="" Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-    </StackPanel>
-
-    <!-- Manual confirmation, in-window: a modal box would block the receiver
-         and steal focus from whatever the user was doing. -->
-    <StackPanel x:Name="ConfirmPanel" VerticalAlignment="Center" Visibility="Collapsed">
-     <TextBlock Text="收到发送请求" Style="{StaticResource StatusTitle}"/>
-     <TextBlock x:Name="ConfirmFrom" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
-     <TextBlock x:Name="ConfirmFiles" Text="" Style="{StaticResource Caption}" HorizontalAlignment="Center" TextAlignment="Center"
-                TextTrimming="CharacterEllipsis" MaxWidth="320" Margin="0,4,0,0"/>
-     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
-      <Button x:Name="AcceptButton" Content="接收" Style="{StaticResource PrimaryButton}" Click="Accept_Click"/>
-      <Button x:Name="DeclineButton" Content="拒绝" Style="{StaticResource GhostButton}" Margin="10,0,0,0" Click="Decline_Click"/>
+     <!-- Manual confirmation, in-window: a modal box would block the receiver
+          and steal focus from whatever the user was doing. -->
+     <StackPanel x:Name="ConfirmPanel" VerticalAlignment="Center" Visibility="Collapsed">
+      <TextBlock Text="收到发送请求" Style="{StaticResource StatusTitle}"/>
+      <TextBlock x:Name="ConfirmFrom" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+      <TextBlock x:Name="ConfirmFiles" Text="" Style="{StaticResource Caption}" HorizontalAlignment="Center" TextAlignment="Center"
+                 TextTrimming="CharacterEllipsis" MaxWidth="320" Margin="0,4,0,0"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+       <Button x:Name="AcceptButton" Content="接收" Style="{StaticResource PrimaryButton}" Click="Accept_Click"/>
+       <Button x:Name="DeclineButton" Content="拒绝" Style="{StaticResource GhostButton}" Margin="10,0,0,0" Click="Decline_Click"/>
+      </StackPanel>
      </StackPanel>
-    </StackPanel>
 
-    <!-- Setup / paused / failure: one sentence, one action. -->
-    <StackPanel x:Name="ActionPanel" VerticalAlignment="Center" Visibility="Collapsed">
-     <TextBlock x:Name="ActionTitle" Text="暂时无法接收" Style="{StaticResource StatusTitle}" TextWrapping="Wrap"/>
-     <TextBlock x:Name="ActionDetail" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
-     <Button x:Name="ActionButton" Content="重试" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Margin="0,18,0,0" Click="ActionButton_Click"/>
-     <Button x:Name="ActionSecondary" Content="查看原因" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0,10,0,0"
-             Visibility="Collapsed" Click="ActionSecondary_Click"/>
-    </StackPanel>
+     <!-- Setup / paused / failure: one sentence, one action. -->
+     <StackPanel x:Name="ActionPanel" VerticalAlignment="Center" Visibility="Collapsed">
+      <TextBlock x:Name="ActionTitle" Text="暂时无法接收" Style="{StaticResource StatusTitle}" TextWrapping="Wrap"/>
+      <TextBlock x:Name="ActionDetail" Text="" Style="{StaticResource BodyText}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+      <Button x:Name="ActionButton" Content="重试" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Margin="0,18,0,0" Click="ActionButton_Click"/>
+      <Button x:Name="ActionSecondary" Content="查看原因" Style="{StaticResource LinkButton}" HorizontalAlignment="Center" Margin="0,10,0,0"
+              Visibility="Collapsed" Click="ActionSecondary_Click"/>
+     </StackPanel>
+    </Grid>
    </Grid>
 
    <!-- ── C. recent ────────────────────────────────────────────────────── -->
