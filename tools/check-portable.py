@@ -5,18 +5,21 @@ import json
 import pathlib
 import sys
 
-REQUIRED = [
+BINARIES = [
     'app/DropLink.exe',
-    'Start-DropLink.vbs',
-    '启动 DropLink.cmd',
-    '_工具/设置 DropLink.cmd',
-    '_工具/测试 DropLink.cmd',
-    '_工具/性能基准.cmd',
     'backend/airbridge_radio.exe',
     'backend/radio_pipe_bridge.exe',
     'backend/awdl_netd.exe',
     'backend/awdld.exe',
     'backend/python/python.exe',
+]
+
+REQUIRED = [
+    'Start-DropLink.vbs',
+    '启动 DropLink.cmd',
+    '_工具/设置 DropLink.cmd',
+    '_工具/测试 DropLink.cmd',
+    '_工具/性能基准.cmd',
     'backend/airdrop/engine.py',
     'backend/airdrop/receiver.py',
     'backend/airdrop/transfer.py',
@@ -28,20 +31,23 @@ REQUIRED = [
     'backend/airdrop/benchmark.ps1',
     'data/settings.default.json',
     'data/hardware.default.json',
-]
+] + BINARIES
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('portable', type=pathlib.Path, help='assembled portable folder')
+    parser.add_argument('--source-only', action='store_true',
+                        help='check the repository skeleton; binaries are expected to be built later')
     args = parser.parse_args()
     root = args.portable.resolve()
+    required = [item for item in REQUIRED if not (args.source_only and item in BINARIES)]
     errors = []
     warnings = []
     if not root.is_dir():
         print(f'FAIL: not a directory: {root}')
         return 1
-    for relative in REQUIRED:
+    for relative in required:
         path = root / relative
         if not path.is_file():
             errors.append(f'missing: {relative}')
@@ -60,7 +66,7 @@ def main():
         if not isinstance(value, dict):
             errors.append(f'{relative}: top level must be an object')
     exe = root / 'app' / 'DropLink.exe'
-    if exe.is_file() and exe.stat().st_size < 1024 * 1024:
+    if not args.source_only and exe.is_file() and exe.stat().st_size < 1024 * 1024:
         errors.append('app/DropLink.exe looks too small; publish may be incomplete')
     for relative in ('data/received', 'data/logs', 'data/keys'):
         if not (root / relative).is_dir():

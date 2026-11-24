@@ -73,6 +73,17 @@ internal sealed class TrayIcon : IDisposable
 
     private static Icon LoadIcon()
     {
+        // Prefer the embedded multi-size icon so the tray gets a crisp 16x16.
+        try
+        {
+            var res = System.Windows.Application.GetResourceStream(new Uri("app.ico", UriKind.Relative));
+            if (res is not null)
+            {
+                using var stream = res.Stream;
+                return new Icon(stream, new System.Drawing.Size(16, 16));
+            }
+        }
+        catch (Exception) { /* fall through to the executable icon */ }
         try
         {
             var path = Environment.ProcessPath;

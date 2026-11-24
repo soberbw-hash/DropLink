@@ -16,6 +16,23 @@ $msg = @{
     Drv = C @(39537,21160,29366,24577)
 }
 
+$autostartTask = 'DropLink'
+function Get-AutostartState {
+    try {
+        $task = Get-ScheduledTask -TaskName $autostartTask -ErrorAction SilentlyContinue
+        if ($task) { return 'on' }
+    } catch { }
+    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'DropLink.lnk'
+    if (Test-Path -LiteralPath $lnk) { return 'on' }
+    return 'off'
+}
+function Remove-LegacyAutostart {
+    # Older builds used a Startup-folder shortcut. It shows a console flash and a
+    # UAC prompt at logon, so the scheduled task replaces it.
+    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'DropLink.lnk'
+    if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }
+}
+
 function Read-JsonFile([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return @{} }
     try { return (Get-Content -Raw -Encoding utf8 -LiteralPath $path | ConvertFrom-Json) } catch { return @{} }
@@ -77,6 +94,7 @@ function Run-Doctor {
     Write-Output ('settings.auto_receive=' + $s.auto_receive)
     Write-Output ('settings.live_copy=' + $s.live_photo_still_copy)
     Write-Output ('settings.format_hint=' + $s.show_format_in_notification)
+    Write-Output ('autostart=' + (Get-AutostartState))
     Write-Output ('hardware.file=' + (FileState $hardwarePath))
     Write-Output ('hardware.allow_untested=' + $h.allow_untested)
     if ($h.devices) { Write-Output ('hardware.devices=' + @($h.devices).Count) } else { Write-Output 'hardware.devices=0' }
@@ -157,6 +175,7 @@ function Get-DoctorData {
             allow_untested = $h.allow_untested
             devices        = @($h.devices).Count
         }
+        autostart = (Get-AutostartState)
         nics      = $nicItems
         link      = [pscustomobject]@{ tcp8771 = (TcpState 8771); udp15353 = (UdpState 15353) }
         processes = [pscustomobject]@{
@@ -183,22 +202,29 @@ switch ($Action) {
         Write-Settings $s
         Write-Output ("OK name=" + $Value)
     }
+    'autostart-state' {
+        Write-Output (Get-AutostartState)
+    }
     'autostart-on' {
-        $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'DropLink.lnk'
-        $target = Join-Path $root '启动 DropLink.cmd'
-        $ws = New-Object -ComObject WScript.Shell
-        $sc = $ws.CreateShortcut($lnk)
-        $sc.TargetPath = $target
-        $sc.Arguments = '--tray'
-        $sc.WorkingDirectory = $root
-        $sc.Description = 'DropLink (tray)'
-        $sc.Save()
-        Write-Output ("OK " + $msg.On)
+        # A logon scheduled task with the highest run level starts the receiver
+        # elevated without a UAC prompt, so the tray appears quietly.
+        $exe = Join-Path $root 'app\DropLink.exe'
+        if (-not (Test-Path -LiteralPath $exe)) { throw ('missing ' + $exe) }
+        $taskAction = New-ScheduledTaskAction -Execute $exe -Argument '--tray' -WorkingDirectory (Split-Path -Parent $exe)
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $userId = [string]$env:USERDOMAIN + '\' + [string]$env:USERNAME
+        $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+        Register-ScheduledTask -TaskName $autostartTask -Action $taskAction -Trigger $trigger `
+            -Principal $principal -Settings $settings -Description 'DropLink AirDrop receiver' -Force | Out-Null
+        Remove-LegacyAutostart
+        Write-Output ('OK ' + $msg.On)
     }
     'autostart-off' {
-        $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'DropLink.lnk'
-        if (Test-Path $lnk) { Remove-Item $lnk -Force }
-        Write-Output ("OK " + $msg.Off)
+        Unregister-ScheduledTask -TaskName $autostartTask -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-LegacyAutostart
+        Write-Output ('OK ' + $msg.Off)
     }
     'checkdriver' {
         $dev = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match 'VID_0BDA&PID_C811' } | Select-Object -First 1
