@@ -154,6 +154,40 @@ public partial class MainWindow : Window
         catch (Exception ex) { ReceiveStatus.Text = "无法启动回退脚本：" + ex.Message; }
     }
 
+    // One-time driver setup changes the system binding, so it is never implicit.
+    // Confirm, then launch the backed-up switch script elevated (UAC). The
+    // script itself imports the signing certificate and asks for "SWITCH".
+    private void Setup_Click(object sender, RoutedEventArgs e)
+    {
+        var script = Environment.GetEnvironmentVariable("DROPLINK_SETUP_CMD") ?? "";
+        if (string.IsNullOrWhiteSpace(script) || !File.Exists(script))
+        {
+            MessageBox.Show(this,
+                "未找到换驱动脚本。请通过“启动软件.cmd”启动本程序（它会设置脚本路径），" +
+                "或确认备份仍在 work\\_backup\\droplink-driver-20261124\\一键换WinUSB.cmd。",
+                "无法继续", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var answer = MessageBox.Show(this,
+            "即将把 0BDA:C811 网卡切换到 WinUSB 驱动，这是接收 AirDrop 的必要一次性步骤：\n\n" +
+            "· 脚本会导入本地签名证书（系统级信任，可回退）；\n" +
+            "· 两块同型号网卡都会切换；上网走以太网，不受影响；\n" +
+            "· 系统会弹管理员授权（UAC），请点“是”；随后输入 SWITCH 回车；\n" +
+            "· 完成后可能要拔插一次网卡，再回来点“检查接收条件”。\n\n" +
+            "随时可用红色“回退驱动”按钮恢复原厂驱动。确定继续吗？",
+            "一键换 WinUSB", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+        try
+        {
+            var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = true, Verb = "runas" };
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add($"\"{script}\"");
+            Process.Start(psi);
+            ReceiveStatus.Text = "已请求管理员权限运行换驱动脚本。请在弹出窗口输入 SWITCH；完成后回来点“检查接收条件”。";
+        }
+        catch (Exception ex) { ReceiveStatus.Text = "无法启动换驱动脚本：" + ex.Message; }
+    }
+
     // Pick a usable radio: any supported, healthy card bound to WinUSB is a
     // legitimate drive target. Two identical C811 cards are fine because each
     // PnP port pins a concrete libusb device, and radio opens strictly by
