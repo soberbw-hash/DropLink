@@ -24,7 +24,14 @@ internal sealed class SingleInstance : IDisposable
 
     // How long a second launch waits for the owner to prove it can still show a
     // window before it decides the owner is wedged and takes the lock away.
-    private static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(8);
+    //
+    // This has to outlast a slow but healthy start, not a fast one. Building the
+    // window runs the path bootstrap, the AUMID registration and a shell call
+    // for the shortcut, and on a machine with an antivirus hooking file access
+    // that can take far longer than 8 s. Killing a receiver that was still
+    // starting is exactly the "I clicked twice and now it will not open at all"
+    // report - the startup watchdog gives a launch 30 s, so this does too.
+    private static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(20);
     // Shorter, because there is no handshake to wait for: an owner from before
     // the handshake existed either pops its window in about a second or is not
     // going to. Making the user stare at nothing for 8 s to learn that is rude.

@@ -35,6 +35,7 @@ public partial class App : System.Windows.Application
         if (TryPreviewMain(e.Args)) { Shutdown(); return; }
         if (TryPreviewSettings(e.Args)) { Shutdown(); return; }
         if (TryPreviewSetup(e.Args)) { Shutdown(); return; }
+        if (TryDiagnose(e.Args)) { Shutdown(); return; }
 
         // A portable app that can only be started from a .cmd does not read as
         // a real program. The shortcut is written by the shell itself, so it is
@@ -206,6 +207,109 @@ public partial class App : System.Windows.Application
             Name = "DropLink startup watchdog"
         };
         thread.Start();
+    }
+
+    // `DropLink.exe --diagnose [out.txt]` writes down everything a "it does not
+    // work on this computer" question actually needs: where the package root
+    // was found, whether each backend file is really there, what the machine
+    // reports for the card, and which step the window would show. Without it
+    // the only way to answer that question is to read data\logs\app.log, which
+    // the person reporting the problem cannot interpret - and on a machine
+    // where the app will not start, may not be written at all.
+    private static bool TryDiagnose(string[] args)
+    {
+        var index = Array.FindIndex(args, a => a.Equals("--diagnose", StringComparison.OrdinalIgnoreCase));
+        if (index < 0) return false;
+        var target = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
+            ? args[index + 1]
+            : Path.Combine(AppPaths.DataDirectory(), "diagnose.txt");
+        try
+        {
+            var text = BuildDiagnosis();
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+            // BOM so Notepad on a machine with a non-UTF-8 default code page
+            // shows the Chinese instead of a wall of question marks.
+            File.WriteAllText(target, text, new System.Text.UTF8Encoding(true));
+            AppLog.Write("diagnose written to " + target);
+        }
+        catch (Exception error)
+        {
+            AppLog.Write("diagnose failed: " + error.Message);
+        }
+        return true;
+    }
+
+    private static string BuildDiagnosis()
+    {
+        // On a pool thread: TakeAsync awaits, and awaiting on the UI thread from
+        // a synchronous caller deadlocks instead of returning.
+        var snapshot = Task.Run(() => ReadinessProbe.TakeAsync()).GetAwaiter().GetResult();
+        var guide = SetupGuide.Evaluate(snapshot.ToGuideInput(false, false));
+        var text = new System.Text.StringBuilder();
+        text.AppendLine("DropLink 自检报告");
+        text.AppendLine("=================");
+        text.AppendLine();
+        text.AppendLine("生成时间   : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        var version = Environment.ProcessPath is { } exePath
+            ? System.Diagnostics.FileVersionInfo.GetVersionInfo(exePath).ProductVersion ?? "?"
+            : "?";
+        // SourceLink appends a 40-character commit hash after a '+'; nobody
+        // reading a support report needs it, and it makes the line unreadable.
+        var plus = version.IndexOf('+');
+        text.AppendLine("程序版本   : " + (plus > 0 ? version[..plus] : version));
+        text.AppendLine("便携版     : " + (AppPaths.IsPortable() ? "是" : "否"));
+        text.AppendLine("便携根目录 : " + AppPaths.PortableRoot());
+        text.AppendLine("数据目录   : " + AppPaths.DataDirectory());
+        text.AppendLine("管理员权限 : " + (Elevation.IsElevated() ? "是" : "否"));
+        text.AppendLine();
+
+        text.AppendLine("后端文件");
+        foreach (var key in new[]
+                 {
+                     "DROPLINK_RADIO_EXE", "DROPLINK_BRIDGE_EXE", "DROPLINK_NETD_EXE",
+                     "DROPLINK_AWDLD_EXE", "DROPLINK_PYTHON", "DROPLINK_ENGINE_SCRIPT"
+                 })
+        {
+            var path = Environment.GetEnvironmentVariable(key) ?? "";
+            var state = string.IsNullOrWhiteSpace(path) ? "缺失" : File.Exists(path) ? "OK  " : "不存在";
+            text.AppendLine("  " + key.Replace("DROPLINK_", "").PadRight(16) + state + "  " + path);
+        }
+        text.AppendLine();
+
+        text.AppendLine("授权标记   : " + (snapshot.Authorized ? "OK" : "缺失"));
+        text.AppendLine("回退已验证 : " + (snapshot.RecoveryVerified ? "OK" : "缺失"));
+        text.AppendLine();
+
+        text.AppendLine("网卡");
+        // Only the supported adapters get a full block. A busy machine reports
+        // two dozen USB devices, and burying the one that matters in a list of
+        // keyboards is how a report stops being read.
+        var supported = snapshot.Devices
+            .Where(d => RadioPreflight.IsSupportedHardwareId(d.HardwareId)).ToArray();
+        if (supported.Length == 0)
+            text.AppendLine("  （没有发现 RTL8811CU / RTL8821CU 网卡）");
+        foreach (var device in supported)
+        {
+            text.AppendLine("  " + device.HardwareId);
+            text.AppendLine("    服务     : " + (string.IsNullOrWhiteSpace(device.Service) ? "（无）" : device.Service));
+            text.AppendLine("    状态     : " + device.Status);
+            text.AppendLine("    位置     : " + device.LocationInfo);
+            text.AppendLine("    可用     : " + (ReadinessProbe.IsReadyCard(device) ? "是（WinUSB）" : "否，需要切换驱动"));
+        }
+        text.AppendLine("  可用 WinUSB 网卡数 : " + snapshot.ReadyWinUsbCards);
+        text.AppendLine("  已定位到 libusb 设备: " + (snapshot.HasTarget ? "是" : "否"));
+        text.AppendLine("  （本机共有 " + snapshot.Devices.Count + " 个 USB 设备，其余未列出）");
+        text.AppendLine();
+
+        text.AppendLine("界面当前会显示");
+        text.AppendLine("  步骤 : " + guide.Step);
+        text.AppendLine("  标题 : " + guide.Title);
+        text.AppendLine("  说明 : " + guide.Detail);
+        text.AppendLine("  按钮 : " + (guide.PrimaryActionVisible ? guide.PrimaryAction : "（无）"));
+        text.AppendLine();
+        text.AppendLine("说明：如果「后端文件」里有任何一项不是 OK，界面就会显示「软件文件不完整」，");
+        text.AppendLine("      这时需要补全 backend 文件夹，而不是反复点启动。");
+        return text.ToString();
     }
 
     // `DropLink.exe --preview-main out.png [state]` renders one main-window

@@ -331,11 +331,6 @@ internal sealed class BackendChain : IAsyncDisposable
         // program with the same file name) would be destroyed. Only processes
         // whose executable lives under this installation's root are ours.
         var root = InstallRoot();
-        if (root is null)
-        {
-            AppLog.Write("stale chain cleanup skipped: cannot determine install root");
-            return 0;
-        }
 
         var killed = 0;
         // Reverse start order so the radio is last.
@@ -386,14 +381,17 @@ internal sealed class BackendChain : IAsyncDisposable
     }
 
     // The folder that contains backend\ (and app\), derived from the host exe.
-    private static string? InstallRoot()
-    {
-        var exe = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(exe)) return null;
-        var appDirectory = Path.GetDirectoryName(exe);
-        if (string.IsNullOrWhiteSpace(appDirectory)) return null;
-        return Directory.GetParent(appDirectory)?.FullName ?? appDirectory;
-    }
+    /// <summary>
+    /// The package root, used to decide which processes belong to this
+    /// installation. AppPaths already walks up to the folder that holds
+    /// backend\, which is the real root in both shipped layouts (exe inside
+    /// app\, or exe directly in the root).
+    ///
+    /// The previous "parent of the exe's own folder" answered the Desktop when
+    /// the exe sat in the package root, so the stale-chain cleanup would have
+    /// treated anything on the Desktop as a candidate to kill.
+    /// </summary>
+    private static string InstallRoot() => AppPaths.PortableRoot();
 
     private static bool BelongsTo(string root, Process process)
     {
