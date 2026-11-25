@@ -540,6 +540,14 @@ class Receiving:
                 return False
         logging.info('receiving as %s on port %d into %s', self.settings.name,
                      self.settings.port, self.settings.dest)
+        # Files that arrived before the staging folder stopped handing down
+        # its owner-only DACL are still on disk, unreadable to the person who
+        # received them. This is the only account that can fix them, and it
+        # is already running.
+        repaired = transfer.repair_permissions(self.settings.dest)
+        if repaired:
+            logging.info('gave %d previously received file(s) back their '
+                         'folder permissions', repaired)
         self._say(True)
         return True
 

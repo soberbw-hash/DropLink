@@ -1,12 +1,16 @@
 """Offline loopback checks; do not transmit wireless frames."""
+import contextlib
 import os
 import pathlib
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
 import types
 import unittest
+import uuid
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -276,6 +280,31 @@ class StagedEngineTests(unittest.TestCase):
             'tools/portable/backend/airdrop/engine.py')
 
 
+@contextlib.contextmanager
+def ordinary_folder():
+    """A temp folder carrying the ACL that %TEMP% hands out.
+
+    tempfile's own folders are created with mode 0o700, which on Windows means
+    a DACL naming only the owner, SYSTEM and Administrators - the very thing
+    the tests below are about. A folder made without a mode inherits
+    normally."""
+    path = os.path.join(tempfile.gettempdir(),
+                        'droplink-acl-' + uuid.uuid4().hex[:8])
+    os.mkdir(path)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def acl_of(path):
+    """The DACL entries icacls prints, with the object name blanked out."""
+    out = subprocess.run(['icacls', str(path)], capture_output=True, text=True,
+                         encoding='mbcs', errors='replace')
+    return tuple(line.strip().replace(str(path), '<object>')
+                 for line in out.stdout.splitlines() if line.strip())
+
+
 class StagingTests(unittest.TestCase):
     def test_hardlink_failure_does_not_create_destination(self):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as s:
@@ -293,3 +322,59 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(result, ['a-1.txt'])
             self.assertEqual(pathlib.Path(d, 'a.txt').read_bytes(), b'old')
             self.assertEqual(pathlib.Path(d, 'a-1.txt').read_bytes(), b'new')
+
+    @unittest.skipUnless(os.name == 'nt', 'NTFS permissions')
+    def test_published_file_gets_the_folders_permissions(self):
+        """A received photo has to be openable by the person who received it.
+
+        The staging folder used to be tempfile.mkdtemp, whose 0o700 mode on
+        Windows becomes a DACL naming only its owner, SYSTEM and
+        Administrators. The hard link carried that DACL to the published
+        name, so a receiver running elevated produced files that only an
+        elevated process could open: the notification preview showed the
+        picture and Explorer answered "access denied"."""
+        with ordinary_folder() as d:
+            control = pathlib.Path(d, 'control.txt')
+            control.write_bytes(b'x')
+            staging = pathlib.Path(d, '.droplink-old')
+            staging.mkdir(mode=0o700)
+            pathlib.Path(staging, 'a.txt').write_bytes(b'photo')
+            self.assertNotEqual(acl_of(staging / 'a.txt'), acl_of(control),
+                                'a 0o700 folder is supposed to hand down its '
+                                'own DACL; the premise of this test broke')
+            published = transfer.publish_staged(staging, d, [transfer.Stored('a.txt')])
+            self.assertEqual(acl_of(pathlib.Path(d, published[0])), acl_of(control))
+
+    @unittest.skipUnless(os.name == 'nt', 'NTFS permissions')
+    def test_staging_folder_keeps_the_folders_permissions(self):
+        with ordinary_folder() as d:
+            control = pathlib.Path(d, 'control.txt')
+            control.write_bytes(b'x')
+            with transfer.staging_folder(d) as staging:
+                pathlib.Path(staging, 'a.txt').write_bytes(b'photo')
+                self.assertEqual(acl_of(pathlib.Path(staging, 'a.txt')), acl_of(control))
+            self.assertEqual([n for n in os.listdir(d) if n.startswith('.droplink-')], [])
+
+    @unittest.skipUnless(os.name == 'nt', 'NTFS permissions')
+    def test_repair_returns_files_published_the_old_way(self):
+        with ordinary_folder() as d:
+            control = pathlib.Path(d, 'control.txt')
+            control.write_bytes(b'x')
+            staging = pathlib.Path(d, '.droplink-old')
+            staging.mkdir(mode=0o700)
+            pathlib.Path(staging, 'a.txt').write_bytes(b'photo')
+            transfer.mark_as_downloaded(str(staging / 'a.txt'))
+            os.link(staging / 'a.txt', pathlib.Path(d, 'a.txt'))
+            self.assertEqual(transfer.repair_permissions(d), 1)
+            self.assertEqual(acl_of(pathlib.Path(d, 'a.txt')), acl_of(control))
+            self.assertEqual(transfer.repair_permissions(d), 0,
+                             'a repaired file must not be repaired again')
+
+    @unittest.skipUnless(os.name == 'nt', 'NTFS permissions')
+    def test_repair_leaves_files_it_did_not_receive_alone(self):
+        with ordinary_folder() as d:
+            stranger = pathlib.Path(d, 'mine.txt')
+            stranger.write_bytes(b'not ours')
+            before = acl_of(stranger)
+            self.assertEqual(transfer.repair_permissions(d), 0)
+            self.assertEqual(acl_of(stranger), before)

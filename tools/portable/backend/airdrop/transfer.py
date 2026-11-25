@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import uuid
 import zlib
 from urllib.parse import urlsplit
 
@@ -503,6 +504,157 @@ def mark_as_downloaded(path):
         pass
 
 
+if os.name == 'nt':
+    import ctypes
+    from ctypes import wintypes
+
+    _SE_FILE_OBJECT = 1
+    _DACL_SECURITY_INFORMATION = 0x00000004
+    _UNPROTECTED_DACL_SECURITY_INFORMATION = 0x20000000
+    _ACL_REVISION = 2
+    _ACL_SIZE_INFORMATION = 2
+    _INHERITED_ACE = 0x10
+
+    class _AclSize(ctypes.Structure):
+        _fields_ = [('AceCount', wintypes.DWORD),
+                    ('AclBytesInUse', wintypes.DWORD),
+                    ('AclBytesFree', wintypes.DWORD)]
+
+    class _AceHead(ctypes.Structure):
+        _fields_ = [('AceType', ctypes.c_ubyte),
+                    ('AceFlags', ctypes.c_ubyte),
+                    ('AceSize', wintypes.WORD)]
+
+    _advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
+    _kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    _advapi32.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    _advapi32.SetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    _advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    _advapi32.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p)]
+    _advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    _advapi32.GetSecurityDescriptorDacl.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
+    _advapi32.GetAclInformation.restype = wintypes.BOOL
+    _advapi32.GetAclInformation.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.c_int]
+    _advapi32.GetAce.restype = wintypes.BOOL
+    _advapi32.GetAce.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    _advapi32.InitializeAcl.restype = wintypes.BOOL
+    _advapi32.InitializeAcl.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD]
+    _kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+
+
+def _dacl_from(path):
+    """The DACL Windows stored on `path`, or None if it cannot be read."""
+    descriptor = ctypes.c_void_p()
+    if _advapi32.GetNamedSecurityInfoW(
+            path, _SE_FILE_OBJECT, _DACL_SECURITY_INFORMATION,
+            None, None, None, None, ctypes.byref(descriptor)) != 0:
+        return None, None
+    present = wintypes.BOOL()
+    acl = ctypes.c_void_p()
+    defaulted = wintypes.BOOL()
+    if not _advapi32.GetSecurityDescriptorDacl(
+            descriptor, ctypes.byref(present), ctypes.byref(acl),
+            ctypes.byref(defaulted)):
+        _kernel32.LocalFree(descriptor)
+        return None, None
+    return descriptor, (acl if present.value else None)
+
+
+def _inherits_anything(path):
+    """True when some entry in the DACL was inherited from the folder."""
+    descriptor, acl = _dacl_from(path)
+    if descriptor is None:
+        return True  # cannot tell; leave the file alone
+    try:
+        if not acl:
+            return False
+        size = _AclSize()
+        if not _advapi32.GetAclInformation(
+                acl, ctypes.byref(size), ctypes.sizeof(size),
+                _ACL_SIZE_INFORMATION):
+            return True
+        for index in range(size.AceCount):
+            entry = ctypes.c_void_p()
+            if not _advapi32.GetAce(acl, index, ctypes.byref(entry)):
+                continue
+            head = ctypes.cast(entry, ctypes.POINTER(_AceHead)).contents
+            if head.AceFlags & _INHERITED_ACE:
+                return True
+        return False
+    finally:
+        _kernel32.LocalFree(descriptor)
+
+
+def inherit_permissions(path):
+    """Give `path` back the permissions of the folder it sits in.
+
+    Windows hands a file the DACL of whatever folder created it, and a folder
+    made with mode 0o700 gets a DACL naming only its owner, SYSTEM and
+    Administrators. A hard link carries that DACL to the published name, so a
+    receiver running elevated published photos that only an elevated process
+    could open: the notification preview showed the picture and Explorer told
+    the person who received it that access was denied.
+
+    Setting an empty, unprotected DACL makes Windows merge in exactly the
+    entries the folder inherits, which is what a file created there normally
+    gets. Nothing is granted that the folder does not already grant.
+    """
+    if os.name != 'nt':
+        return True
+    empty = ctypes.create_string_buffer(1024)
+    if not _advapi32.InitializeAcl(empty, len(empty), _ACL_REVISION):
+        return False
+    return _advapi32.SetNamedSecurityInfoW(
+        path, _SE_FILE_OBJECT,
+        _DACL_SECURITY_INFORMATION | _UNPROTECTED_DACL_SECURITY_INFORMATION,
+        None, None, empty, None) == 0
+
+
+def _is_received(path):
+    """True for a file this receiver wrote: they all carry the zone mark."""
+    try:
+        with open(path + ':Zone.Identifier', 'rb') as mark:
+            return mark.read(len(ZONE_MARK)) == ZONE_MARK
+    except OSError:
+        return False
+
+
+def repair_permissions(dest):
+    """Fix files received before published names inherited the folder's ACL.
+
+    Only files carrying this receiver's own mark are touched, and only when
+    nothing in their DACL was inherited: the receive folder can be pointed at
+    Downloads, and other files there are not ours to rewrite.
+    """
+    repaired = 0
+    try:
+        entries = list(os.scandir(dest))
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if not entry.is_file() or not _is_received(entry.path):
+                continue
+            if _inherits_anything(entry.path):
+                continue
+            if inherit_permissions(entry.path):
+                repaired += 1
+        except OSError:
+            continue
+    return repaired
+
+
 class ExtractionBudget:
     def __init__(self, byte_limit):
         self.byte_limit = byte_limit
@@ -669,11 +821,19 @@ def publish_staged(staging, dest, names):
             name = numbered(name, groups[group])
         for number in range(MAX_NAME_ATTEMPTS):
             candidate = numbered(name, number)
+            published_path = os.path.join(dest, candidate)
             try:
                 # link() atomically creates a name and fails if it exists.
-                os.link(source, os.path.join(dest, candidate))
+                os.link(source, published_path)
             except FileExistsError:
                 continue
+            # The published name shares the staging file's security
+            # descriptor, so whatever the staging folder handed down lands on
+            # a file the user is about to open. Make sure that is the receive
+            # folder's own set of permissions.
+            if not inherit_permissions(published_path):
+                logging.warning('upload: %r published with its staging '
+                                'permissions, not the folder\'s', candidate)
             published.append(Stored(candidate, group))
             break
         else:
@@ -681,9 +841,31 @@ def publish_staged(staging, dest, names):
     return published
 
 
+@contextlib.contextmanager
+def staging_folder(dest):
+    """A scratch folder inside dest that keeps dest's own permissions.
+
+    tempfile.mkdtemp is the obvious choice and the wrong one here. Since
+    Python 3.12 a 0o700 folder on Windows gets a DACL naming only its owner,
+    SYSTEM and Administrators, and a hard link carries that DACL to the
+    published file. The receiver runs elevated, so its owner is the
+    Administrators group: the file arrived, the notification preview showed
+    it, and the person double-clicking it in Explorer was told access was
+    denied.
+    """
+    path = os.path.join(dest, '.droplink-' + uuid.uuid4().hex)
+    # No mode: a mode would become a DACL. Without one the folder inherits
+    # the receive folder's entries, and so does everything created in it.
+    os.mkdir(path)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def store_upload(raw, dest, tid, receive_budget):
     """Decode and validate the full archive before publishing complete files."""
-    with tempfile.TemporaryDirectory(prefix='.droplink-', dir=dest) as staging:
+    with staging_folder(dest) as staging:
         with tempfile.TemporaryFile(dir=staging) as archive:
             raw.seek(0)
             logging.debug('upload %s: body starts with %s', tid, raw.read(8).hex())
