@@ -7,7 +7,13 @@ namespace DropLink;
 // starts a process or sends frames; it only decides what the UI should say.
 internal enum GuideStep
 {
-    EnvironmentBlocked, // backend files missing / not launched via start script
+    // Before the first readiness probe returns. It is deliberately not
+    // EnvironmentBlocked: the window paints its first frame from the field's
+    // initial value, and starting on a setup step made a healthy machine
+    // announce "需要完成一次配置" for the several seconds the probe takes.
+    // Nothing has been looked at yet, so nothing can be wrong yet either.
+    Checking,
+    EnvironmentBlocked, // backend files missing
     NeedRestart,        // authorization / recovery flags not set
     SwitchDriver,       // no supported card bound to WinUSB yet
     Rescan,             // WinUSB present but not yet pinned to a libusb device

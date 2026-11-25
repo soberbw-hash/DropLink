@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     private string? failure;
     private string failureHint = "";
     private SetupGuideResult? guide;
-    private GuideStep currentStep = GuideStep.EnvironmentBlocked;
+    private GuideStep currentStep = GuideStep.Checking;
     private int supportedCards;
     private int readyCards;
     private string deviceName = "";
@@ -620,7 +620,7 @@ public partial class MainWindow : Window
         if (supportedCards == 0 && guide is not null) return UiState.NoDevice;
         if (currentStep is GuideStep.SwitchDriver or GuideStep.Rescan or GuideStep.EnvironmentBlocked or GuideStep.NeedRestart)
             return UiState.Setup;
-        if (starting || currentStep == GuideStep.Starting) return UiState.Preparing;
+        if (starting || currentStep is GuideStep.Starting or GuideStep.Checking) return UiState.Preparing;
         return UiState.Waiting;
     }
 
