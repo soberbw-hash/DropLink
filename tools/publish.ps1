@@ -104,6 +104,27 @@ if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
         Write-Output ('engine=' + $copied + ' file(s) synced to ' + $scriptTarget)
     }
 
+    # The driver kit drifts the same way the manual did: the shipped copy under
+    # _backup is what the user actually double-clicks, and the one that gets
+    # fixed is the one under tools\portable. A stale copy there is worse than a
+    # stale manual - it fails at the step where the machine stops being able to
+    # see the network card at all.
+    $kitSource = Join-Path $repo 'tools\portable\driver-kit'
+    $kitTarget = Join-Path $packageRoot '_backup\droplink-driver'
+    if ((Test-Path -LiteralPath $kitSource) -and (Test-Path -LiteralPath $kitTarget)) {
+        $kitCopied = 0
+        foreach ($item in Get-ChildItem -LiteralPath $kitSource -File) {
+            $dest = Join-Path $kitTarget $item.Name
+            if ((Test-Path -LiteralPath $dest) -and
+                ((Get-FileHash -LiteralPath $item.FullName).Hash -eq (Get-FileHash -LiteralPath $dest).Hash)) {
+                continue
+            }
+            Copy-Item -LiteralPath $item.FullName -Destination $dest -Force
+            $kitCopied++
+        }
+        Write-Output ('driver-kit=' + $kitCopied + ' file(s) updated')
+    }
+
     # The user manual ships at the package root and is generated, not authored
     # there: tools\portable holds the copy that gets edited. Two hand-maintained
     # copies is how the shipped text ended up telling people to launch through a

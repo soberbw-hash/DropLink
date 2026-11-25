@@ -61,7 +61,12 @@ $skipFiles = @(
     '_backup\droplink-driver\setup.log',
     'backend\awdl_netd.addr',
     '*.old',
-    '*.bak-*'
+    '*.bak-*',
+    # The package root is the repository root now, so the version-control
+    # metadata sits next to the files that ship. A recipient unzipping the
+    # delivery does not need to know this was a git checkout.
+    '.gitignore',
+    '.gitattributes'
 )
 
 function Test-Skip([string]$relative) {
