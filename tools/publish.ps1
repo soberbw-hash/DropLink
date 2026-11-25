@@ -75,6 +75,29 @@ if (Test-Path -LiteralPath $art) {
     Copy-Item -LiteralPath $art -Destination (Join-Path $Target 'icon-source.png') -Force
 }
 
+# The engine and the PowerShell helpers live beside the backends, not inside the
+# exe. Publishing only the exe left a package running last week's engine after a
+# rebuild, which reads as "the fix did not work". Sync them whenever the target
+# sits in a real package root - one whose backend\ actually holds the radio, so
+# the template tree under tools\portable is not touched.
+$packageRoot = Split-Path -Parent $Target
+$runtimeBackend = Join-Path $packageRoot 'backend'
+if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
+    $scriptSource = Join-Path $repo 'tools\portable\backend\airdrop'
+    $scriptTarget = Join-Path $runtimeBackend 'airdrop'
+    if (Test-Path -LiteralPath $scriptSource) {
+        if (-not (Test-Path -LiteralPath $scriptTarget)) {
+            New-Item -ItemType Directory -Path $scriptTarget -Force | Out-Null
+        }
+        $copied = 0
+        foreach ($item in Get-ChildItem -LiteralPath $scriptSource -File) {
+            Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $scriptTarget $item.Name) -Force
+            $copied++
+        }
+        Write-Output ('engine=' + $copied + ' file(s) synced to ' + $scriptTarget)
+    }
+}
+
 $info = Get-Item -LiteralPath (Join-Path $Target 'DropLink.exe')
 Write-Output ('OK ' + $info.FullName)
 Write-Output ('bytes=' + $info.Length)

@@ -38,6 +38,23 @@ var answered = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunCont
 var unexpectedExit = false;
 var temp = Path.Combine(Path.GetTempPath(), "droplink-test-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
+
+// HardwarePolicy looks for data\hardware.json by walking up from the exe. In a
+// checkout that also carries the shipped package, that walk reaches the real
+// machine's file, and the preflight checks then judge the synthetic test
+// devices by this computer's allow-list - "同型号设备不是唯一的" about devices
+// that only exist in the test. Point the lookup at a throwaway policy first;
+// HardwarePolicy caches on first use, so this has to happen before anything
+// touches it.
+var policyForTests = Path.Combine(temp, "hardware-policy.json");
+File.WriteAllText(policyForTests, """
+    {"allow_untested":true,"devices":[
+      {"hardware_id":"USB\\VID_0BDA&PID_C811","vid_pid":"0BDA:C811","status":"verified"},
+      {"hardware_id":"USB\\VID_0BDA&PID_C820&MI_02","vid_pid":"0BDA:C820","status":"verified"}
+    ]}
+    """);
+Environment.SetEnvironmentVariable("DROPLINK_HARDWARE_FILE", policyForTests);
+
 try
 {
     // Build an isolated self-contained layout so path bootstrap checks do not
@@ -104,7 +121,7 @@ CrashBudgetChecks.Run();
     }
     var ready = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
     var engineDir = Environment.GetEnvironmentVariable("DROPLINK_AIRDROP_DIR")
-        ?? Path.Combine(root, ".prepared/winawdl/airdrop");
+        ?? Path.Combine(root, "tools/portable/backend/airdrop");
     var actual = Path.Combine(engineDir, "engine.py");
     if (!File.Exists(actual))
     {

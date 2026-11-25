@@ -77,6 +77,19 @@ ROOT_ALLOWED = {
     'DropLink.exe.old',
 }
 
+# The shipped package and the source tree share one folder now: the package is
+# what you run, the source is what you build it from. Recognised by the project
+# file, so a real release package (which carries no source) still reports
+# anything unexpected at its root.
+SOURCE_FOLDERS = {
+    'src', 'tests', 'tools', 'docs', 'evidence', 'patches', 'out',
+    'README.md', '.gitignore', '.gitattributes',
+}
+
+
+def is_checkout(root):
+    return (root / 'src' / 'DropLink' / 'DropLink.csproj').is_file()
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -99,8 +112,9 @@ def main():
             errors.append(f'missing: {relative}')
         elif path.stat().st_size == 0:
             errors.append(f'empty: {relative}')
+    allowed = ROOT_ALLOWED | (SOURCE_FOLDERS if is_checkout(root) else set())
     for entry in sorted(root.iterdir()):
-        if entry.name in ROOT_ALLOWED or entry.name.startswith('.'):
+        if entry.name in allowed or entry.name.startswith('.'):
             continue
         warnings.append(f'stray at the root: {entry.name}')
     for relative in ('data/settings.json', 'data/hardware.json'):
