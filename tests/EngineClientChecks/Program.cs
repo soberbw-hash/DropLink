@@ -6,7 +6,7 @@ var mock = Path.Combine(root, "tests/EngineClientChecks/mock_engine.py");
 // Resolve an interpreter that actually exists on this host. The previous
 // hardcoded /usr/bin/python3 made the whole suite fail on Windows with a
 // FileNotFoundException that looked like a product bug. Order: explicit
-// override, then the bundled portable runtime, then whatever is on PATH.
+// override, then a bundled runtime anywhere obvious, then PATH.
 var python = ResolvePython();
 static string ResolvePython()
 {
@@ -15,10 +15,20 @@ static string ResolvePython()
 
     if (OperatingSystem.IsWindows())
     {
-        var bundled = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            "DropLink-可运行", "backend", "python", "python.exe");
-        if (File.Exists(bundled)) return bundled;
+        // A packaged runtime, wherever this checkout happens to sit. The
+        // interpreter only has to run the engine's standard-library code, so
+        // the host's own python is an acceptable last resort.
+        var repo = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+        var candidates = new List<string>
+        {
+            Path.Combine(repo, "tools", "portable", "backend", "python", "python.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "DropLink", "backend", "python", "python.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "DropLink-可运行", "backend", "python", "python.exe"),
+        };
+        foreach (var candidate in candidates)
+            if (File.Exists(candidate)) return candidate;
         return "python.exe";
     }
     return File.Exists("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
@@ -51,6 +61,7 @@ try
         Path.Combine(backupDir, "回退驱动.cmd")
     }) File.WriteAllText(file, "placeholder");
     AppPathsChecks.Run(realExeDir);
+    AppPathsChecks.RunPortable(Path.Combine(temp, "portable"));
     RadioPreflightChecks.Run(temp);
     ReadinessReportChecks.Run(temp);
     SetupGuideChecks.Run(temp);

@@ -39,6 +39,12 @@ internal sealed class SingleInstance : IDisposable
     private EventWaitHandle? ack;
     private readonly Thread? listener;
     private volatile bool disposed;
+    // Stored rather than rebuilt in ConfirmAlive: the constructor scopes every
+    // name with the same suffix, and a ConfirmAlive that opened the unscoped
+    // name answered an event nobody was waiting on. With a scope in use the
+    // second launch then waited out the full timeout and went looking for a
+    // process to kill.
+    private readonly string ackName;
 
     /// <summary>This process owns the receiver and must run.</summary>
     public bool IsFirst { get; }
@@ -63,7 +69,7 @@ internal sealed class SingleInstance : IDisposable
         var mutexName = MutexName + suffix;
         var eventName = ActivateEventName + suffix;
         var settingsName = SettingsEventName + suffix;
-        var ackName = AckEventName + suffix;
+        ackName = AckEventName + suffix;
 
         mutex = new Mutex(initiallyOwned: true, mutexName, out var created);
         ownsMutex = created;
@@ -170,7 +176,7 @@ internal sealed class SingleInstance : IDisposable
     {
         try
         {
-            using var ack = EventWaitHandle.OpenExisting(AckEventName);
+            using var ack = EventWaitHandle.OpenExisting(ackName);
             ack.Set();
         }
         catch (Exception) { /* no waiter, or we are shutting down */ }
