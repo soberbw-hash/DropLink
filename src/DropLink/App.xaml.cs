@@ -411,7 +411,7 @@ public partial class App : System.Windows.Application
         var target = args[index + 1];
         try
         {
-            var page = new SettingsWindow(null) { ShowInTaskbar = false };
+            var page = new SettingsWindow(null, preview: true) { ShowInTaskbar = false };
             page.Show();
             // The page fills in the autostart switch from a PowerShell query; wait
             // for that answer, otherwise the screenshot shows a half-loaded page.

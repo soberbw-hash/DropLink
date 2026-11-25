@@ -34,6 +34,10 @@ public partial class SettingsWindow : Window
     private readonly Func<string, Task<bool>>? applyDeviceName;
     private readonly Func<string, Task<bool>>? applyReceiveFolder;
     private readonly Action? clearHistory;
+    /// <summary>Screenshot mode. The page is committed to the repository as a
+    /// PNG, so it must show sample values instead of this machine's folder and
+    /// host name.</summary>
+    private readonly bool preview;
     private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly string hostName = System.Net.Dns.GetHostName().Split('.')[0];
     private JsonObject settings = new();
@@ -42,13 +46,18 @@ public partial class SettingsWindow : Window
     private bool loading = true;
     private bool applyingAutostart;
 
+    private const string SampleFolder = @"C:\Users\you\Downloads\DropLink";
+    private const string SampleName = "我的电脑";
+
     internal SettingsWindow(Func<string, Task<bool>>? applyDeviceName,
-        Func<string, Task<bool>>? applyReceiveFolder = null, Action? clearHistory = null)
+        Func<string, Task<bool>>? applyReceiveFolder = null, Action? clearHistory = null,
+        bool preview = false)
     {
         InitializeComponent();
         this.applyDeviceName = applyDeviceName;
         this.applyReceiveFolder = applyReceiveFolder;
         this.clearHistory = clearHistory;
+        this.preview = preview;
         Loaded += async (_, _) => await LoadAsync();
     }
 
@@ -76,16 +85,16 @@ public partial class SettingsWindow : Window
         {
             settings = ReadSettings();
             committedName = Str("device_name");
-            DeviceNameBox.Text = committedName;
+            DeviceNameBox.Text = preview ? "" : committedName;
             // Same source the engine uses for its default (socket.gethostname),
             // so the placeholder is the name the phone will really show.
-            DeviceNamePlaceholder.Text = hostName;
+            DeviceNamePlaceholder.Text = preview ? SampleName : hostName;
             DeviceNameBox.TextChanged += (_, _) => UpdateNamePlaceholder();
             UpdateNamePlaceholder();
             AutoReceiveSwitch.IsChecked = Bool("auto_receive", true);
             LivePhotoSwitch.IsChecked = Bool("live_photo_still_copy", true);
             FormatSwitch.IsChecked = Bool("show_format_in_notification", true);
-            FolderText.Text = SettingsFile.ReceiveFolder();
+            FolderText.Text = preview ? SampleFolder : SettingsFile.ReceiveFolder();
             VersionText.Text = Version();
             HistoryHint.Text = "首页显示最近三次。清空列表不会删除已经收到的文件。";
         }

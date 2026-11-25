@@ -8,6 +8,9 @@ var mock = Path.Combine(root, "tests/EngineClientChecks/mock_engine.py");
 // FileNotFoundException that looked like a product bug. Order: explicit
 // override, then a bundled runtime anywhere obvious, then PATH.
 var python = ResolvePython();
+// Hand the resolved interpreter to the checks that launch processes, so none of
+// them has to carry its own copy of "where python lives".
+Environment.SetEnvironmentVariable("DROPLINK_TEST_PYTHON", python);
 static string ResolvePython()
 {
     var overridden = Environment.GetEnvironmentVariable("DROPLINK_TEST_PYTHON");

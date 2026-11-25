@@ -22,6 +22,11 @@ public partial class SetupWindow : Window
     private ReadinessSnapshot? snapshot;
     private bool busy;
     private bool finished;
+    // Screenshot mode. Scraping the real receive folder put this machine's user
+    // name into a PNG that ships with the repository.
+    private bool preview;
+
+    private const string SampleFolder = @"C:\Users\you\Downloads\DropLink";
 
     internal SetupWindow(Func<Task<(bool Ok, string Message)>> verify)
     {
@@ -30,11 +35,14 @@ public partial class SetupWindow : Window
         Loaded += async (_, _) => await RefreshAsync();
     }
 
+    private string FolderForDisplay() => preview ? SampleFolder : SettingsFile.ReceiveFolder();
+
     /// <summary>Dev-only: forces one screen for `--preview-setup`. The facts on
     /// it still come from a real probe of this machine, so the screenshot can
     /// never show a state the code cannot produce.</summary>
     internal Task PreviewAsync(int value)
     {
+        preview = true;
         step = Math.Clamp(value, 1, 4);
         return RefreshAsync();
     }
@@ -154,8 +162,8 @@ public partial class SetupWindow : Window
         StepDetail.Text = "这三项随时可以在设置里改，现在只是先定一个默认值。";
         PreferenceCard.Visibility = Visibility.Visible;
         AutoReceiveSwitch.IsChecked = SettingsFile.Flag("auto_receive", true);
-        NameBox.Text = SettingsFile.Text("device_name");
-        FolderText.Text = SettingsFile.ReceiveFolder();
+        NameBox.Text = preview ? "" : SettingsFile.Text("device_name");
+        FolderText.Text = FolderForDisplay();
         NextButton.Content = "保存并继续";
     }
 

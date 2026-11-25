@@ -1015,6 +1015,10 @@ public partial class MainWindow : Window
         supportedCards = 1;
         readyCards = 1;
         currentStep = GuideStep.Receiving;
+        // Screenshots are committed to the repository, so the machine's own name
+        // must never reach them. It used to, because the preview rendered
+        // whatever Environment.MachineName returned on the build machine.
+        deviceName = "我的电脑";
         guide = new SetupGuideResult(GuideStep.Receiving, "等待接收", "", "", false);
         transfers.Items.Clear();
         paused = false;
