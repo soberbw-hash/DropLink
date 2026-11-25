@@ -9,7 +9,14 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($Target)) {
-    $Target = Join-Path $repo 'tools\portable\app'
+    # The shipping package and the source tree are the same folder now: repo\app
+    # holds the exe, repo\backend holds the backends. Only a checkout that has no
+    # backends beside it falls back to the old separate staging tree.
+    if (Test-Path -LiteralPath (Join-Path $repo 'backend\airbridge_radio.exe')) {
+        $Target = Join-Path $repo 'app'
+    } else {
+        $Target = Join-Path $repo 'tools\portable\app'
+    }
 }
 
 $project = Join-Path $repo 'src\DropLink\DropLink.csproj'
@@ -95,6 +102,26 @@ if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
             $copied++
         }
         Write-Output ('engine=' + $copied + ' file(s) synced to ' + $scriptTarget)
+    }
+
+    # The user manual ships at the package root and is generated, not authored
+    # there: tools\portable holds the copy that gets edited. Two hand-maintained
+    # copies is how the shipped text ended up telling people to launch through a
+    # script the program no longer needs. Matched by extension rather than by
+    # name so this file stays pure ASCII - PowerShell 5.1 reads a BOM-less script
+    # as ANSI, and a Chinese literal here would arrive as mojibake.
+    $manualSource = @(Get-ChildItem -LiteralPath (Join-Path $repo 'tools\portable') -Filter '*.txt' -File -ErrorAction SilentlyContinue)
+    if ($manualSource.Count -eq 1) {
+        $manualTarget = Join-Path $packageRoot $manualSource[0].Name
+        if ((Test-Path -LiteralPath $manualTarget) -and
+            ((Get-FileHash -LiteralPath $manualSource[0].FullName).Hash -eq (Get-FileHash -LiteralPath $manualTarget).Hash)) {
+            Write-Output 'manual=unchanged'
+        } else {
+            Copy-Item -LiteralPath $manualSource[0].FullName -Destination $manualTarget -Force
+            Write-Output ('manual=synced to ' + $manualTarget)
+        }
+    } else {
+        Write-Output ('manual=skipped (' + $manualSource.Count + ' .txt files in tools\portable)')
     }
 }
 
