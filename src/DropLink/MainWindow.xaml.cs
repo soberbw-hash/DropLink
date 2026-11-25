@@ -63,7 +63,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         ApplyWindowIcon();
-        deviceName = Environment.GetEnvironmentVariable("DROPLINK_DEVICE_NAME") ?? Environment.MachineName;
+        deviceName = ConfiguredName();
         history = new TransferHistory(Path.Combine(AppPaths.DataDirectory(), "history.json"));
         history.Refresh();
         RecentList.ItemsSource = history.Recent;
@@ -228,6 +228,23 @@ public partial class MainWindow : Window
         if (current is null) return false;
         await current.SetNameAsync(deviceName);
         return true;
+    }
+
+    /// <summary>
+    /// The name a phone will show for this computer.
+    ///
+    /// The engine prefers <c>settings.device_name</c> over the <c>--name</c> it
+    /// is launched with, so a window that started from the computer name keeps
+    /// showing that name after the user has renamed the receiver - the header
+    /// and the AirDrop list disagree, and only one of them is telling the truth.
+    /// Read the same file the engine reads, in the same order.
+    /// </summary>
+    private static string ConfiguredName()
+    {
+        var overridden = Environment.GetEnvironmentVariable("DROPLINK_DEVICE_NAME");
+        if (!string.IsNullOrWhiteSpace(overridden)) return overridden;
+        var saved = SettingsFile.Text("device_name");
+        return string.IsNullOrWhiteSpace(saved) ? Environment.MachineName : saved;
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettingsWindow();

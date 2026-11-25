@@ -261,6 +261,14 @@ public partial class App : System.Windows.Application
         text.AppendLine("便携根目录 : " + AppPaths.PortableRoot());
         text.AppendLine("数据目录   : " + AppPaths.DataDirectory());
         text.AppendLine("管理员权限 : " + (Elevation.IsElevated() ? "是" : "否"));
+        // The window and the engine must agree on this. The engine prefers
+        // settings.device_name over the --name it is launched with, so a window
+        // that used the computer name would show one name while the phone lists
+        // another. Printing the resolved value here makes that visible.
+        var savedName = SettingsFile.Text("device_name");
+        text.AppendLine("接收名字   : " + (string.IsNullOrWhiteSpace(savedName)
+            ? Environment.MachineName + "（未设置，用计算机名）"
+            : savedName));
         text.AppendLine();
 
         text.AppendLine("后端文件");
