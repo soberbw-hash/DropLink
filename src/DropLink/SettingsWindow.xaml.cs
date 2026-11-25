@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using MessageBox = System.Windows.MessageBox;
@@ -42,6 +43,9 @@ public partial class SettingsWindow : Window
     private readonly string hostName = System.Net.Dns.GetHostName().Split('.')[0];
     private JsonObject settings = new();
     private string committedName = "";
+    /// <summary>Whether the name was written during this visit, so the button
+    /// can say "已保存" instead of looking like it did nothing.</summary>
+    private bool nameSaved;
     private bool autostartState;
     private bool loading = true;
     private bool applyingAutostart;
@@ -75,6 +79,10 @@ public partial class SettingsWindow : Window
         finally
         {
             loading = false;
+            // Has to run after loading is false: UpdateSaveState reads it, and
+            // called from inside LoadCoreAsync it would return immediately and
+            // leave the button whatever the XAML declared.
+            UpdateSaveState();
             ready.TrySetResult();
         }
     }
@@ -89,7 +97,6 @@ public partial class SettingsWindow : Window
             // Same source the engine uses for its default (socket.gethostname),
             // so the placeholder is the name the phone will really show.
             DeviceNamePlaceholder.Text = preview ? SampleName : hostName;
-            DeviceNameBox.TextChanged += (_, _) => UpdateNamePlaceholder();
             UpdateNamePlaceholder();
             AutoReceiveSwitch.IsChecked = Bool("auto_receive", true);
             LivePhotoSwitch.IsChecked = Bool("live_photo_still_copy", true);
@@ -130,6 +137,28 @@ public partial class SettingsWindow : Window
     private void UpdateNamePlaceholder() =>
         DeviceNamePlaceholder.Visibility =
             DeviceNameBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void DeviceName_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        UpdateNamePlaceholder();
+        UpdateSaveState();
+    }
+
+    /// <summary>
+    /// The save button doubles as the receipt: nothing to save, save, saved.
+    /// It stays in place so the row does not jump, and it is the only thing on
+    /// this page that is not live, which the header line now says.
+    /// </summary>
+    private void UpdateSaveState()
+    {
+        if (loading) return;
+        var dirty = DeviceNameBox.Text.Trim() != committedName;
+        if (dirty) nameSaved = false;
+        SaveNameButton.IsEnabled = dirty;
+        SaveNameButton.Content = dirty ? "保存" : (nameSaved ? "已保存" : "保存");
+    }
+
+    private async void SaveName_Click(object sender, RoutedEventArgs e) => await CommitNameAsync();
 
     private string Str(string key) =>
         settings[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : "";
@@ -197,6 +226,8 @@ public partial class SettingsWindow : Window
             return;
         }
         committedName = typed;
+        nameSaved = true;
+        UpdateSaveState();
 
         // An empty box means "use the computer name"; push that resolved name so
         // the phone shows what the placeholder promised.

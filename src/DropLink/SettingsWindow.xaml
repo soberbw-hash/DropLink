@@ -24,7 +24,7 @@
  <Border Background="{StaticResource PageBackground}">
   <StackPanel Margin="28,22,28,18">
    <TextBlock Text="设置" FontSize="23" FontWeight="Medium" Foreground="{StaticResource TextPrimary}"/>
-   <TextBlock Text="改完立刻生效，不用点保存。" Style="{StaticResource BodyText}" Margin="0,6,0,18"/>
+   <TextBlock Text="开关和路径改完立刻生效；名字那一栏点保存或按回车。" Style="{StaticResource BodyText}" Margin="0,6,0,18"/>
 
    <TextBlock Text="常规" Style="{StaticResource SectionTitle}"/>
    <Border Style="{StaticResource Card}">
@@ -33,15 +33,26 @@
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
       <StackPanel Grid.Column="0" Margin="0,0,20,0">
        <TextBlock Text="这台电脑在 iPhone 上显示的名字" Style="{StaticResource RowTitle}"/>
-       <TextBlock Text="隔空投送列表里看到的就是它。留空则用电脑名。" Style="{StaticResource RowHint}"/>
+       <TextBlock Text="隔空投送列表里就是它。留空用电脑名。" Style="{StaticResource RowHint}" TextWrapping="Wrap"/>
       </StackPanel>
-      <Grid Grid.Column="1" Width="220">
-       <TextBox x:Name="DeviceNameBox" Padding="9,7" FontSize="13.5" Foreground="{StaticResource TextPrimary}"
-                Background="{StaticResource SurfaceMuted}" BorderBrush="{StaticResource Border}" BorderThickness="1"
-                VerticalContentAlignment="Center" MaxLength="40" LostFocus="DeviceName_Commit" KeyDown="DeviceName_KeyDown"/>
-       <TextBlock x:Name="DeviceNamePlaceholder" IsHitTestVisible="False" Foreground="{StaticResource TextTertiary}" FontSize="13.5"
-                  Margin="12,0,0,0" VerticalAlignment="Center"/>
-      </Grid>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+       <Grid Width="180">
+        <TextBox x:Name="DeviceNameBox" Padding="9,7" FontSize="13.5" Foreground="{StaticResource TextPrimary}"
+                 Background="{StaticResource SurfaceMuted}" BorderBrush="{StaticResource Border}" BorderThickness="1"
+                 VerticalContentAlignment="Center" MaxLength="40" LostFocus="DeviceName_Commit" KeyDown="DeviceName_KeyDown"
+                 TextChanged="DeviceName_TextChanged"/>
+        <TextBlock x:Name="DeviceNamePlaceholder" IsHitTestVisible="False" Foreground="{StaticResource TextTertiary}" FontSize="13.5"
+                   Margin="12,0,0,0" VerticalAlignment="Center"/>
+       </Grid>
+       <!-- The one setting that cannot apply on every keystroke, so it gets an
+            explicit commit and somewhere to say it happened. Without this the
+            text was saved on Enter or on losing focus, and the only feedback
+            was a line at the very bottom of a page the user was not looking
+            at. The switches keep writing the moment they move. -->
+       <Button x:Name="SaveNameButton" Content="保存" Style="{StaticResource GhostButton}"
+               Padding="12,7" Margin="8,0,0,0" IsEnabled="False" Click="SaveName_Click"
+               ToolTip="把名字写进设置并立刻生效（也可以按回车）"/>
+      </StackPanel>
      </Grid>
 
      <Border Style="{StaticResource Hairline}" Margin="0,14"/>
