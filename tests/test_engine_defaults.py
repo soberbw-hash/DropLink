@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.environ.get('DROPLINK_AIRDROP_DIR', str(pathlib.Path(__file__).resolve().parents[1] / '.prepared/winawdl/airdrop')))
+sys.path.insert(0, os.environ.get('DROPLINK_AIRDROP_DIR', str(pathlib.Path(__file__).resolve().parents[1] / 'tools/portable/backend/airdrop')))
 import engine
 
 

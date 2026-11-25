@@ -14,11 +14,16 @@ import uuid
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-AIR = pathlib.Path(os.environ.get('DROPLINK_AIRDROP_DIR', ROOT / '.prepared/winawdl/airdrop'))
+# Import the code that ships, not a staged copy. The copy at
+# .prepared/winawdl/airdrop used to be what the tests imported, and when it fell
+# behind, an auto-receive priority bug stayed green locally while the shipped
+# build still had it. tools/portable/data holds only *.default.json, so
+# load_settings() still sees an empty context here.
+AIR = pathlib.Path(os.environ.get('DROPLINK_AIRDROP_DIR', ROOT / 'tools' / 'portable' / 'backend' / 'airdrop'))
 # Vendored at WinAWDL 2196fb48b97cef1ee17ee1350c442972c4efeaf0 so Heard is
 # available without requiring a full prepared source tree for offline checks.
 VENDOR = pathlib.Path(__file__).resolve().parent / 'support' / 'winawdl'
-sys.path[:0] = [str(AIR), str(VENDOR), str(AIR / 'tests')]
+sys.path[:0] = [str(AIR), str(VENDOR)]
 import engine
 import receiver
 import sender
@@ -260,26 +265,6 @@ class SettingsPriorityTests(unittest.TestCase):
         self.assertTrue(args.ask)
 
 
-class StagedEngineTests(unittest.TestCase):
-    """The engine under test must be the engine that ships.
-
-    Tests import the staged copy at .prepared/winawdl/airdrop so the real engine
-    gets an empty settings context. When that copy fell behind, an auto-receive
-    priority bug stayed green locally while the shipped build still had it.
-    """
-
-    def test_staged_engine_matches_the_shipped_one(self):
-        shipped = ROOT / 'tools' / 'portable' / 'backend' / 'airdrop' / 'engine.py'
-        staged = AIR / 'engine.py'
-        if not shipped.is_file() or not staged.is_file():
-            self.skipTest('engine sources not present in this checkout')
-        self.assertEqual(
-            shipped.read_bytes(), staged.read_bytes(),
-            'staged engine.py drifted from tools/portable/backend/airdrop/engine.py; '
-            'run: python tools/prepare-test-engine.py --engine-only '
-            'tools/portable/backend/airdrop/engine.py')
-
-
 @contextlib.contextmanager
 def ordinary_folder():
     """A temp folder carrying the ACL that %TEMP% hands out.
@@ -378,3 +363,30 @@ class StagingTests(unittest.TestCase):
             before = acl_of(stranger)
             self.assertEqual(transfer.repair_permissions(d), 0)
             self.assertEqual(acl_of(stranger), before)
+
+
+class ServiceIdentityTests(unittest.TestCase):
+    """The receiver hides from a phone that has just received from it by
+    rotating its mDNS instance ID. That only helps across restarts if the new
+    ID is written down, so the rotation has to persist."""
+
+    def test_rotation_persists_across_a_restart(self):
+        with tempfile.TemporaryDirectory() as keys:
+            first = receiver.stable_service_id('fd00::1234', keys)
+            rotated = receiver.rotate_service_id(keys)
+            self.assertNotEqual(first, rotated,
+                                'a rotation that changes nothing does not hide the receiver')
+            self.assertEqual(receiver.stable_service_id('fd00::1234', keys), rotated,
+                             'a restart went back to the identity the phone already cached')
+
+    def test_rotation_is_twelve_hex_digits(self):
+        with tempfile.TemporaryDirectory() as keys:
+            rotated = receiver.rotate_service_id(keys)
+            self.assertRegex(rotated, r'^[0-9a-f]{12}$')
+
+    def test_stable_id_survives_a_missing_keys_folder(self):
+        # First run: the folder does not exist yet. It must not raise.
+        with tempfile.TemporaryDirectory() as root:
+            keys = os.path.join(root, 'not-yet')
+            value = receiver.stable_service_id('fd00::99', keys)
+            self.assertRegex(value, r'^[0-9a-f]{12}$')

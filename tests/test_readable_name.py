@@ -13,7 +13,7 @@ import sys
 import time
 import unittest
 
-sys.path.insert(0, os.environ.get('DROPLINK_AIRDROP_DIR', str(pathlib.Path(__file__).resolve().parents[1] / '.prepared/winawdl/airdrop')))
+sys.path.insert(0, os.environ.get('DROPLINK_AIRDROP_DIR', str(pathlib.Path(__file__).resolve().parents[1] / 'tools/portable/backend/airdrop')))
 import transfer
 
 # Built from the calendar rather than a raw epoch, so the expectation stays

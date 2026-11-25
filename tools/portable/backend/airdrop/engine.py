@@ -531,7 +531,7 @@ class Receiving:
             try:
                 service = mdns.Service(receiver.SERVICE_TYPE, service_id, f'{service_id}.local',
                                        address, self.settings.port, f'flags={self.settings.flags}')
-                self.announcer = (receiver.ProxyAnnouncer(service, self.proxy_port)
+                self.announcer = (receiver.ProxyAnnouncer(service, self.proxy_port, self.keys)
                                   if self.proxy else mdns.Announcer(service, index))
                 self.announcer.start()
             except OSError as error:
