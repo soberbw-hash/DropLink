@@ -671,7 +671,7 @@ public partial class MainWindow : Window
         switch (state)
         {
             case UiState.Setup:
-                ActionTitle.Text = guide?.Title ?? "完成一次配置，即可开始隔空投送";
+                ActionTitle.Text = guide?.Title ?? "配置一次，开始隔空投送";
                 ActionDetail.Text = guide?.Detail ?? "";
                 ActionButton.Content = string.IsNullOrWhiteSpace(guide?.PrimaryAction) ? "重新检查" : guide.PrimaryAction;
                 break;
@@ -996,7 +996,7 @@ public partial class MainWindow : Window
                 // Mirrors SetupGuide's first-run copy. It is sample text for a
                 // layout render; the live window always gets it from the guide.
                 guide = new SetupGuideResult(GuideStep.SwitchDriver,
-                    "完成一次配置，即可开始隔空投送",
+                    "配置一次，开始隔空投送",
                     "需要把这张无线网卡切换成 WinUSB。一次即可，随时可以回退。",
                     "开始配置", true);
                 break;

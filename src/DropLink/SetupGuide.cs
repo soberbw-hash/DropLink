@@ -81,7 +81,7 @@ internal static class SetupGuide
         if (input.ReadyWinUsbCards == 0)
             return new SetupGuideResult(
                 GuideStep.SwitchDriver,
-                "完成一次配置，即可开始隔空投送",
+                "配置一次，开始隔空投送",
                 "需要把这张无线网卡切换成 WinUSB。一次即可，随时可以回退。",
                 "开始配置", true);
 
