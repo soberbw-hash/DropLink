@@ -88,6 +88,7 @@ try
     else Console.WriteLine("SKIP: single instance is Windows-only");
     await ReceiverSessionChecks.Run(temp);
     TransferStateChecks.Run();
+    HistoryChecks.Run(temp);
 CrashBudgetChecks.Run();
     if (!OperatingSystem.IsWindows())
     {

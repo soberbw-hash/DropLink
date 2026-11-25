@@ -253,8 +253,11 @@ public partial class MainWindow : Window
         }
     }
 
+    // Also reached from the settings page, where clearing is deliberate and
+    // final, so no undo is kept.
     private void ClearHistory()
     {
+        clearedHistory = null;
         history.Clear();
         UpdateRecentEmpty();
         Render();
@@ -542,8 +545,42 @@ public partial class MainWindow : Window
         Render();
     }
 
-    private void UpdateRecentEmpty() =>
-        RecentEmpty.Visibility = history.Recent.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    // What the × removed, so the empty line can offer to put it back. Null once
+    // a new transfer lands: an undo that outlives new rows would silently drop
+    // them when it is clicked.
+    private List<HistoryBatch>? clearedHistory;
+
+    private void UpdateRecentEmpty()
+    {
+        var empty = history.Recent.Count == 0;
+        if (!empty) clearedHistory = null;
+        RecentEmptyPanel.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        RecentEmpty.Text = clearedHistory is null
+            ? "收到的文件会显示在这里"
+            : "最近记录已清空，收到的文件还在";
+        UndoClearButton.Visibility = clearedHistory is null ? Visibility.Collapsed : Visibility.Visible;
+        ClearHistoryButton.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (history.Count == 0) return;
+        var restore = history.Snapshot();
+        ClearHistory();
+        clearedHistory = restore;
+        UpdateRecentEmpty();
+    }
+
+    private void UndoClear_Click(object sender, RoutedEventArgs e)
+    {
+        if (clearedHistory is null) return;
+        var restore = clearedHistory;
+        clearedHistory = null;
+        history.Restore(restore);
+        UpdateRecentEmpty();
+        Render();
+        AppLog.Write($"history undo: {restore.Count} record(s) restored");
+    }
 
     // ── rendering: the single source of what the window says ───────────────
 
@@ -1042,6 +1079,13 @@ public partial class MainWindow : Window
             history.Recent.Add(new HistoryBatch { Id = "p1", At = DateTime.Now.AddSeconds(-20), Folder = SettingsFile.ReceiveFolder(), Files = ["IMG_2841.HEIC"], Bytes = 9_017_344, Kind = "image", Sender = "iPhone" });
             history.Recent.Add(new HistoryBatch { Id = "p2", At = DateTime.Now.AddMinutes(-12), Folder = SettingsFile.ReceiveFolder(), Files = ["IMG_2840.MOV"], Bytes = 134_637_568, Kind = "video", Sender = "iPhone" });
             history.Recent.Add(new HistoryBatch { Id = "p3", At = DateTime.Now.AddHours(-3), Folder = SettingsFile.ReceiveFolder(), Files = ["a.heic", "b.heic", "c.heic", "d.heic", "e.heic", "f.heic"], Bytes = 44_875_776, Kind = "image", Sender = "iPhone" });
+            UpdateRecentEmpty();
+        }
+        else if (state == "cleared")
+        {
+            // The state right after the × is pressed, before the undo expires.
+            history.Recent.Clear();
+            clearedHistory = [new HistoryBatch { Id = "p1", At = DateTime.Now, Folder = SettingsFile.ReceiveFolder(), Files = ["IMG_2841.HEIC"], Bytes = 9_017_344, Kind = "image", Sender = "iPhone" }];
             UpdateRecentEmpty();
         }
         Render();

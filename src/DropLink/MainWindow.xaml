@@ -174,10 +174,27 @@
     <Border Style="{StaticResource Hairline}" Margin="0,0,0,10"/>
     <Grid Margin="8,0,8,2">
      <TextBlock Text="最近接收" Style="{StaticResource SectionHeader}"/>
-     <Button x:Name="OpenFolderButton" Content="打开文件夹" Style="{StaticResource LinkButton}" HorizontalAlignment="Right" Click="OpenFolder_Click"/>
+     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+      <Button x:Name="OpenFolderButton" Content="打开文件夹" Style="{StaticResource LinkButton}" Click="OpenFolder_Click"/>
+      <!-- One click clears the list, and it is reversible: clearing never touches
+           a file, so the undo only has to put the rows back. Hidden while there
+           is nothing to clear, which is also the only time it would do nothing. -->
+      <Button x:Name="ClearHistoryButton" Style="{StaticResource IconButton}" Padding="4"
+              Margin="7,0,0,0" Click="ClearHistory_Click" Visibility="Collapsed"
+              ToolTip="清空最近接收记录（不会删除文件）">
+       <Canvas Width="11" Height="11">
+        <Path Data="M1,1 L10,10 M10,1 L1,10" Stroke="{StaticResource TextSecondary}" StrokeThickness="1.5"
+              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+       </Canvas>
+      </Button>
+     </StackPanel>
     </Grid>
     <ItemsControl x:Name="RecentList" ItemTemplate="{StaticResource HistoryRow}" Margin="0,2,0,6" Focusable="False"/>
-    <TextBlock x:Name="RecentEmpty" Text="收到的文件会显示在这里" Style="{StaticResource Caption}" Margin="8,6,0,10"/>
+    <StackPanel x:Name="RecentEmptyPanel" Orientation="Horizontal" Margin="8,6,0,10">
+     <TextBlock x:Name="RecentEmpty" Text="收到的文件会显示在这里" Style="{StaticResource Caption}"/>
+     <Button x:Name="UndoClearButton" Content="撤销" Style="{StaticResource LinkButton}"
+             Margin="8,0,0,0" Visibility="Collapsed" Click="UndoClear_Click"/>
+    </StackPanel>
    </StackPanel>
 
    <!-- ── footer ───────────────────────────────────────────────────────── -->

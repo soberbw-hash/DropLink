@@ -210,6 +210,29 @@ def _copy_exact(source, writer, size, truncated, deadline):
         left -= len(data)
 
 
+def _preview(data, limit=48):
+    """The first bytes of something that was not what was expected.
+
+    A field report of "invalid chunk-size line" says nothing about whether the
+    sender stopped talking or sent a different framing altogether. Both look
+    identical in a log message that only names the failure, and they need
+    opposite fixes, so the bytes go in the message.
+    """
+    shown = data[:limit]
+    text = ''.join(chr(byte) if 32 <= byte < 127 else '.' for byte in shown)
+    tail = '...' if len(data) > limit else ''
+    return f'{shown.hex(" ")}{tail} | {text}{tail}'
+
+
+def _framing_hint(line):
+    """Name the cause when the bytes identify it, instead of only the symptom."""
+    if line.startswith(b'bplist'):
+        # What a de-chunking intermediary leaves behind: the real body, with the
+        # header that described the framing still in place.
+        return ' - a raw binary plist arrived while the request declared chunked encoding'
+    return ''
+
+
 def _read_chunked(rfile, writer, deadline):
     while True:
         deadline.awaiting = 'a chunk header'
@@ -217,13 +240,29 @@ def _read_chunked(rfile, writer, deadline):
         line = rfile.readline(MAX_CHUNK_LINE_BYTES + 1)
         deadline.between_chunks = False
         deadline.note(len(line))
-        if not line or len(line) > MAX_CHUNK_LINE_BYTES or not line.endswith(b'\n'):
-            raise RequestBodyError('invalid or overlong chunk-size line')
+        if not line:
+            # A closed connection is not a malformed one: the sender gave up
+            # before or during the body, and the phone shows "waiting" because
+            # it never got an answer. Saying so is the whole difference between
+            # chasing a parser bug and chasing the link.
+            raise RequestBodyError(
+                'sender closed the connection before the body arrived: '
+                f'{deadline.transferred} bytes read, then waiting for '
+                f'{deadline.awaiting} after {deadline.chunks} chunk(s)')
+        if len(line) > MAX_CHUNK_LINE_BYTES:
+            raise RequestBodyError(
+                f'chunk-size line longer than {MAX_CHUNK_LINE_BYTES} bytes: '
+                + _preview(line) + _framing_hint(line))
+        if not line.endswith(b'\n'):
+            raise RequestBodyError(
+                'body is not chunked framing (no line break in the first '
+                f'{len(line)} bytes): ' + _preview(line) + _framing_hint(line))
         token = line.split(b';', 1)[0].strip()
         try:
             size = int(token, 16)
         except ValueError:
-            raise RequestBodyError(f'invalid chunk size: {token[:40]!r}') from None
+            raise RequestBodyError(
+                f'invalid chunk size: {_preview(line)}' + _framing_hint(line)) from None
         if size < 0:
             raise RequestBodyError('negative chunk size')
         if size == 0:
@@ -233,9 +272,14 @@ def _read_chunked(rfile, writer, deadline):
                 line = rfile.readline(MAX_CHUNK_LINE_BYTES + 1)
                 deadline.note(len(line))
                 trailers += len(line)
-                if (not line or len(line) > MAX_CHUNK_LINE_BYTES
-                        or trailers > MAX_TRAILER_BYTES):
-                    raise RequestBodyError('invalid or overlong chunk trailers')
+                if not line:
+                    raise RequestBodyError(
+                        'sender closed the connection inside the body: '
+                        f'{deadline.transferred} bytes read, waiting for '
+                        f'{deadline.awaiting}')
+                if len(line) > MAX_CHUNK_LINE_BYTES or trailers > MAX_TRAILER_BYTES:
+                    raise RequestBodyError(
+                        'chunk trailers are too long: ' + _preview(line))
                 if line in (b'\r\n', b'\n'):
                     return
         if size > writer.remaining:

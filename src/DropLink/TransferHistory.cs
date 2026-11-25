@@ -116,6 +116,18 @@ internal sealed class TransferHistory
         Refresh();
     }
 
+    /// <summary>The whole list, so a clear can be undone. Refresh only shows the
+    /// newest three; undoing from the window has to put all of them back.</summary>
+    public List<HistoryBatch> Snapshot() => [.. items];
+
+    public void Restore(IReadOnlyList<HistoryBatch> snapshot)
+    {
+        items.Clear();
+        items.AddRange(snapshot);
+        Save();
+        Refresh();
+    }
+
     public int Count => items.Count;
 
     private void Load()
