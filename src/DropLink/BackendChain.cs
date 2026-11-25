@@ -66,9 +66,35 @@ internal sealed class BackendChain : IAsyncDisposable
             // was merely slow, which then read as "iPhone 又搜不到了".
             Stage?.Invoke("正在初始化无线电（固件与射频）…");
             AppLog.Mark("radio:start");
-            await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
-                "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(300), cancel,
-                RadioListeningAsync).ConfigureAwait(false);
+            // NEVER probe 49876 with a throwaway TCP connection. The radio greets
+            // every accepted client with a HELLO frame; a probe that connects and
+            // immediately closes makes that write fail, and the radio treats it as
+            // a fatal error and shuts itself down ("radio: HELLO write failed" ->
+            // "shutdown: done"), taking the whole chain with it. Readiness must be
+            // taken from the log line only — it is printed at every level.
+            // Retried, not just waited on: the radio can hang silently inside the
+            // USB open when it starts seconds after the previous run released the
+            // adapter (two threads, zero output, no TCP port). Killing it and
+            // starting over clears the stuck endpoint; without this the window
+            // sits on "正在准备接收" for the entire multi-minute budget.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await StartStage(files.Radio, ["149", "20"], BuildRadioEnvironment(selectedTarget),
+                        "listening on 127.0.0.1:49876", TimeSpan.FromSeconds(240), cancel,
+                        TimeSpan.FromSeconds(25)).ConfigureAwait(false);
+                    break;
+                }
+                catch (TimeoutException) when (attempt < 3)
+                {
+                    AppLog.Mark($"radio:start silent (attempt {attempt}), retrying");
+                    processes.RemoveAll(p => { try { return p.HasExited; } catch { return true; } });
+                    cancel.ThrowIfCancellationRequested();
+                    // The adapter needs a moment after the stuck handle goes away.
+                    await Task.Delay(TimeSpan.FromSeconds(6), cancel).ConfigureAwait(false);
+                }
+            }
             AppLog.Mark("radio:ready");
             Stage?.Invoke("正在启动无线桥接…");
             await StartStage(files.Bridge, [], [], "waiting for awdld", TimeSpan.FromSeconds(30), cancel).ConfigureAwait(false);
@@ -89,8 +115,33 @@ internal sealed class BackendChain : IAsyncDisposable
             // arrives and then abort, so start it with a short retry loop rather
             // than guessing a sleep duration.
             var awdldArgs = new[] { "-c", "149", "-s", "1", "-j", "400", "-v" };
+            // Election: metric wins first (200 beat the phone's 527), but the
+            // counter breaks the tie and the phone's counter keeps growing
+            // (240k and climbing) while ours was pinned at 100000. The master
+            // therefore flipped every ~2 s — ours, theirs, ours — and with it the
+            // channel sequence, so the two sides never sat on the same channel
+            // long enough to exchange data. A counter far above anything a phone
+            // accumulates keeps us the master, and a master that does not move
+            // lets the phone follow our 6/149 sequence instead of us chasing its
+            // 153 (which awdld refuses: "use 6, 44 or 149").
+            // Channel sequence: keep the reference "social" sequence.
+            //
+            // Every AWDL device reserves slot 8 for the social channel (6), and
+            // that slot is where peers meet to swap mDNS. Parking all 16 slots
+            // on 149 (the "fixed" sequence, selected by *removing* this
+            // variable) deletes that meeting point: the phone's own sequence is
+            // "153,0,149,0,0,0,0,0,6,0,149,0,...", so the only slots the two
+            // sides can ever share are the social one and 149 — and a fixed
+            // run has no social slot at all. Measured: with social the phone
+            // completed "POST /Discover 200"; with fixed it only ever hit the
+            // 5 s TLS timeout.
+            //
+            // The earlier flicker was not caused by hopping. It was the
+            // election flipping master every ~2 s, which rewrote the channel
+            // sequence mid-flight. That is fixed by the counter below, so the
+            // sequence can stay social.
             var awdldEnv = new Dictionary<string, string?> {
-                ["AWDL_ELECTION_METRIC"] = "200", ["AWDL_ELECTION_COUNTER"] = "100000",
+                ["AWDL_ELECTION_METRIC"] = "200", ["AWDL_ELECTION_COUNTER"] = "2000000000",
                 ["AWDL_CHANSEQ"] = "social", ["AWDL_FOLLOW_MASTER_SEQ"] = null
             };
             for (var attempt = 1; ; attempt++)
@@ -151,20 +202,6 @@ internal sealed class BackendChain : IAsyncDisposable
         return null;
     }
 
-    // Port probe used as an independent readiness signal for the radio stage.
-    // Connecting proves the backend is accepting clients; nothing is sent.
-    internal static async Task<bool> RadioListeningAsync()
-    {
-        try
-        {
-            using var client = new TcpClient();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(600));
-            await client.ConnectAsync(IPAddress.Loopback, 49876, timeout.Token).ConfigureAwait(false);
-            return client.Connected;
-        }
-        catch { return false; }
-    }
-
     // Fail-closed. Supplies strict topology to the radio ONLY when a resolved
     // target is passed in; default behavior remains the legacy VID/PID open.
     // Kept internal+static so this mapping is unit-testable without starting
@@ -209,7 +246,7 @@ internal sealed class BackendChain : IAsyncDisposable
     }
 
     private async Task StartStage(string path, string[] args, Dictionary<string, string?> environment,
-        string ready, TimeSpan timeout, CancellationToken cancel, Func<Task<bool>>? probe = null)
+        string ready, TimeSpan timeout, CancellationToken cancel, TimeSpan? silentTimeout = null)
     {
         var info = new ProcessStartInfo(Path.GetFullPath(path)) { UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true,
@@ -220,9 +257,17 @@ internal sealed class BackendChain : IAsyncDisposable
         var readySignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var child = new Process { StartInfo = info, EnableRaisingEvents = true };
         var backendName = Path.GetFileNameWithoutExtension(path);
+        // A stage that prints nothing at all is not slow, it is stuck. The radio
+        // has been seen to hang inside the USB open with two threads and zero
+        // output right after the previous run let go of the adapter; waiting out
+        // the whole multi-minute budget made the window look frozen. So silence
+        // gets its own, much shorter, deadline and the caller may retry.
+        var startTicks = Environment.TickCount64;
+        int sawOutput = 0, deliberateStop = 0;
         void Line(string? line)
         {
             if (line is null) return;
+            Volatile.Write(ref sawOutput, 1);
             // Kept on disk, not just inspected: when awdld exits on start, the
             // reason is on its own stderr, and that line is the difference
             // between a fix and another round of guessing.
@@ -234,7 +279,10 @@ internal sealed class BackendChain : IAsyncDisposable
         child.Exited += (_, _) =>
         {
             readySignal.TrySetException(new InvalidOperationException("后端进程提前退出。"));
-            if (Volatile.Read(ref stopping) == 0 && started)
+            // A kill we ordered ourselves is a retry, not a crashed chain: going
+            // through Failed/StopAsync here would tear down the session that the
+            // retry loop is about to rebuild.
+            if (Volatile.Read(ref stopping) == 0 && started && Volatile.Read(ref deliberateStop) == 0)
             {
                 Failed?.Invoke("后端进程意外退出，链路正在关闭。");
                 _ = StopAsync();
@@ -246,18 +294,21 @@ internal sealed class BackendChain : IAsyncDisposable
         ProcessJob.Assign(child);
         AppLog.Mark($"backend:started {Path.GetFileName(path)} pid={child.Id}");
         child.BeginOutputReadLine(); child.BeginErrorReadLine();
-        // Readiness is accepted from either the log line or a live probe. The
-        // probe exists because the log wording/level is not contractual: the
-        // radio only emits "listening on ..." after a ~45 s RF init, and a
-        // changed log level would otherwise look like a hang.
+        // Readiness comes from the log line alone. There used to be a TCP probe
+        // here as a "second signal"; it was actively harmful for the radio (see
+        // the call site), and for the other three stages the line is what the
+        // reference chain script waits on, so it is the contractual signal.
         var deadline = DateTime.UtcNow + timeout;
         while (!readySignal.Task.IsCompleted)
         {
-            if (probe is not null)
+            if (silentTimeout is { } silent
+                && Volatile.Read(ref sawOutput) == 0
+                && Environment.TickCount64 - startTicks >= (long)silent.TotalMilliseconds)
             {
-                bool ok = false;
-                try { ok = await probe().ConfigureAwait(false); } catch { /* not listening yet */ }
-                if (ok) { readySignal.TrySetResult(); break; }
+                Volatile.Write(ref deliberateStop, 1);
+                try { child.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                throw new TimeoutException(
+                    $"后端启动 {silent.TotalSeconds:0} 秒没有任何输出：{Path.GetFileName(path)}");
             }
             if (DateTime.UtcNow >= deadline)
                 throw new TimeoutException($"后端未在 {timeout.TotalSeconds:0} 秒内就绪：{Path.GetFileName(path)}");

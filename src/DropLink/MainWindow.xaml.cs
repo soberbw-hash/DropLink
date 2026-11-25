@@ -677,12 +677,12 @@ public partial class MainWindow : Window
                 break;
             case UiState.Paused:
                 ActionTitle.Text = "接收已暂停";
-                ActionDetail.Text = "新的发送请求会被拒绝，正在传输的会做完。";
+                ActionDetail.Text = "新的请求会被拒绝，在传的会做完。";
                 ActionButton.Content = "恢复接收";
                 break;
             case UiState.NoDevice:
                 ActionTitle.Text = "请连接无线网卡";
-                ActionDetail.Text = "插上已配置好的网卡会自动恢复，不用重开软件。";
+                ActionDetail.Text = "插上网卡会自动恢复，不用重开。";
                 ActionButton.Content = "重新检查";
                 break;
             default:

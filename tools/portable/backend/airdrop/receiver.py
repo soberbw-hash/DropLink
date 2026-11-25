@@ -84,6 +84,28 @@ def stable_service_id(address, store_dir=None):
         except OSError:
             pass
     return value
+
+
+def rotate_service_id(store_dir=None):
+    """A fresh instance ID, persisted so a restart keeps the new identity.
+
+    Called after a completed upload to get past the sender's "just received
+    from this one" cache. The AWDL address, port and TXT records are untouched;
+    only the service instance name changes, which is what a phone keys its
+    listing on.
+    """
+    value = secrets.token_hex(6)
+    path = os.path.join(store_dir, 'airdrop-service-id') if store_dir else None
+    if path:
+        try:
+            os.makedirs(store_dir, exist_ok=True)
+            with open(path, 'w', encoding='ascii') as handle:
+                handle.write(value + '\n')
+        except OSError:
+            pass
+    return value
+
+
 INTERFACE_WAIT_SECONDS = 20
 BIND_ATTEMPTS = 5
 BIND_PAUSE_SECONDS = 2
@@ -431,6 +453,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reject(*refused)
             return
         watcher.stored(token, written)
+        # One successful transfer is enough to get this receiver hidden from
+        # the next AirDrop sheet; ask the announcer for a fresh identity.
+        ROTATE_REQUEST.set()
         self.send_response(200)
         self.send_header('Content-Length', '0')
         if not ended:
@@ -553,12 +578,43 @@ def tls_context(keys_dir):
     return context
 
 
+# Every AWDL device listens only on its own channel sequence, so an announce
+# that goes out during a slot the two sides do not share is simply lost. A
+# chanseq round is ~1.04 s (16 slots), so the reference 0.5 s period yields
+# only ~2 announces per round. That is enough to be *seen* now and then and
+# not enough to stay listed: a phone whose sequence overlaps ours in 3 of 16
+# slots drops the entry as soon as one announce in a row is missed. At 30 ms
+# a round carries ~22 announces, so most shared slots are covered.
+#
+# The period alone is not what decides the hit rate: the loop below blocks in
+# recv() between announces, so a 0.2 s timeout capped the real rate at ~5/s
+# no matter what this number said. Our chanseq shares only slot 8 (65 ms of
+# every 1048 ms, ~6 %) with a phone, so 5/s meant roughly one usable announce
+# per second and a phone that blinks out whenever one is missed. Reading with
+# a 4 ms timeout and announcing every 30 ms gives ~65 attempts per second
+# (two copies per tick), several of which land on the shared slot — enough to stay listed.
+ANNOUNCE_INTERVAL_S = 0.03
+RECV_TIMEOUT_S = 0.004
+# While a file is uploading the announce is slowed down, not stopped: going
+# silent for the four seconds a photo takes is long enough for the phone to
+# drop the entry, and then the *next* AirDrop sheet shows nothing at all.
+TRANSFER_ANNOUNCE_S = 0.3
+# Set once an upload has been stored. The phone marks a receiver it has just
+# received from and stops listing it for a while, so the next sheet comes up
+# empty even though the radio is still there. Rotating the Service instance ID
+# sidesteps that cache: the records look like a brand-new receiver, while the
+# display name (which travels in the TLS/Discover answer, not in mDNS) stays
+# the same, so nothing changes on screen.
+ROTATE_REQUEST = threading.Event()
+
+
 class ProxyAnnouncer:
     """Reuses mdns.Service records, but carries them over awdl_netd's UDP proxy
     instead of opening an IPv6 socket on the Windows interface."""
 
-    def __init__(self, service, proxy_port):
+    def __init__(self, service, proxy_port, store_dir=None):
         self.service = service
+        self.store_dir = store_dir
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('127.0.0.1', 0))
         self.sock.connect(('127.0.0.1', proxy_port))
@@ -578,19 +634,53 @@ class ProxyAnnouncer:
             pass
         self.sock.close()
 
+    def _rotate(self):
+        """Say goodbye under the old instance, then come back as a new one.
+
+        The display name the sender shows comes from the TLS certificate and
+        the Discover answer, so only the mDNS instance changes here - the phone
+        sees a receiver it has not just received from and lists it again.
+        """
+        try:
+            self.sock.send(self.service.response(alive=False))
+        except OSError:
+            pass
+        try:
+            new_id = rotate_service_id(self.store_dir)
+            self.service = mdns.Service(
+                SERVICE_TYPE, new_id, f'{new_id}.local',
+                str(self.service.address), self.service.port, self.service.text)
+            logging.info('service id rotated to %s after a completed upload', new_id)
+        except Exception as error:
+            logging.warning('could not rotate the service id: %s', error)
+        return self.service.response()
+
     def _run(self):
         response = self.service.response()
         # An iPhone that has just opened the AirDrop sheet may miss the first
-        # AWDL slot; a short burst makes the receiver appear immediately.
-        for _ in range(3):
+        # AWDL slot; a short, dense burst makes the receiver appear before the
+        # phone's sheet gives up on the scan.
+        for _ in range(10):
             self.sock.send(response)
-            time.sleep(0.1)
-        next_announce = time.time() + 0.5
+            time.sleep(0.03)
+        next_announce = time.time() + ANNOUNCE_INTERVAL_S
         while not self.stopping.is_set():
-            if TRANSFER_BUSY.is_set():
-                time.sleep(0.2)
+            if ROTATE_REQUEST.is_set():
+                ROTATE_REQUEST.clear()
+                response = self._rotate()
+                for _ in range(10):
+                    self.sock.send(response)
+                    time.sleep(0.03)
+                next_announce = time.time() + ANNOUNCE_INTERVAL_S
                 continue
-            self.sock.settimeout(0.2)
+            if TRANSFER_BUSY.is_set():
+                # Uploading: keep a slow announce so the entry does not lapse.
+                if time.time() >= next_announce:
+                    self.sock.send(response)
+                    next_announce = time.time() + TRANSFER_ANNOUNCE_S
+                time.sleep(0.05)
+                continue
+            self.sock.settimeout(RECV_TIMEOUT_S)
             try:
                 packet = self.sock.recv(9000)
             except (TimeoutError, socket.timeout):
@@ -600,11 +690,18 @@ class ProxyAnnouncer:
             if packet:
                 asked = mdns.question_names(packet) & self.service.names()
                 if asked:
-                    self.sock.send(response)
-                    self.sock.send(response)
+                    # A question arrived, so the radio is on the phone's channel
+                    # right now: answer inside this slot instead of waiting for
+                    # the next announce tick. Four copies because in a crowded
+                    # 2.4 GHz band roughly a quarter of the frames arrive with
+                    # a bad CRC and a single lost copy costs a whole round.
+                    for _ in range(4):
+                        self.sock.send(response)
+                    next_announce = time.time() + ANNOUNCE_INTERVAL_S
             if time.time() >= next_announce:
                 self.sock.send(response)
-                next_announce = time.time() + 0.5
+                self.sock.send(response)
+                next_announce = time.time() + ANNOUNCE_INTERVAL_S
 
 
 def main(argv=None):
@@ -647,7 +744,7 @@ def main(argv=None):
                 mdns.Service(SERVICE_TYPE, service_id, f'{service_id}.local',
                              mdns_address, settings.port,
                              f'flags={settings.flags}'),
-                settings.mdns_proxy_port)
+                settings.mdns_proxy_port, settings.keys)
         else:
             logging.warning('no --mdns-address; iPhone discovery will not work')
 

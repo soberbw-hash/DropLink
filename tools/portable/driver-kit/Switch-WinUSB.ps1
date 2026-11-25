@@ -186,12 +186,18 @@ if ((Get-AuthenticodeSignature $catPath).Status -ne 'Valid') {
 # ------------------------------------------------------------ 4. install it
 Write-Step "Installing driver package..."
 $add = & pnputil.exe /add-driver "$infPath" /install 2>&1 | Out-String
-Write-Log "pnputil add-driver: $add"
-if ($add -match 'oem\d+\.inf') {
-    $oem = [regex]::Match($add, 'oem\d+\.inf').Value
-    Write-Log "published as $oem"
-}
-if ($LASTEXITCODE -ne 0) {
+$addExit = $LASTEXITCODE
+Write-Log "pnputil add-driver (exit=$addExit): $add"
+# pnputil returns a non-zero code in two very different situations: the package
+# was really refused, and the harmless "package already present / the driver on
+# the device is up to date" case (it reports 0 packages added). Only a run that
+# produced no oemNN.inf name actually failed. Treating the second case as a
+# failure aborted before the FORCE binding below and left the adapter on its
+# original driver, which is exactly what "Windows refused the driver package"
+# used to mean on a machine where the package was already in the store.
+$published = if ($add -match '(oem\d+\.inf)') { $Matches[1] } else { $null }
+if ($published) { Write-Log "published as $published" }
+if (-not $published) {
     Write-Host "[X] Windows refused the driver package."
     Write-Host $add.Trim()
     exit 6
@@ -207,14 +213,20 @@ public static extern bool UpdateDriverForPlugAndPlayDevicesW(
 
 Write-Step "Binding adapter to WinUSB..."
 $reboot = $false
-$force = [uint32]1   # INSTALLFLAG_FORCE
+# NOTE: do not name this $force -- PowerShell variable names are case
+# insensitive, so it would assign to the [switch]$Force parameter and fail with
+# "cannot convert System.UInt32 to SwitchParameter".
+$installFlags = [uint32]1   # INSTALLFLAG_FORCE
 $ok = [DropLinkDriver.Native]::UpdateDriverForPlugAndPlayDevicesW(
-    [IntPtr]::Zero, 'USB\VID_0BDA&PID_C811', $infPath, $force, [ref]$reboot)
+    [IntPtr]::Zero, 'USB\VID_0BDA&PID_C811', $infPath, $installFlags, [ref]$reboot)
 Write-Log "UpdateDriverForPlugAndPlayDevices=$ok"
 
 if (-not $ok) {
     # Second attempt without FORCE, then rescan: some builds rank the in-box
     # winusb.inf above our package and need a re-enumeration instead.
+    Write-Step "Retrying the binding..."
+    $retry = & pnputil.exe /add-driver "$infPath" /install /force 2>&1 | Out-String
+    Write-Log "pnputil retry (exit=$LASTEXITCODE): $retry"
     & pnputil.exe /scan-devices 2>&1 | Out-Null
     Start-Sleep -Seconds 2
 }

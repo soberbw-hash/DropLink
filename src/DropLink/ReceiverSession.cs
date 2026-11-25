@@ -109,14 +109,14 @@ internal sealed class ReceiverSession : IAsyncDisposable
         // pretending and rebuild from the radio up.
         if (OverCrashBudget())
         {
-            Failed?.Invoke($"接收引擎在 10 分钟内反复退出（代码 {code}），正在重建无线链路。");
+            Failed?.Invoke($"接收引擎反复退出（代码 {code}），正在重建链路。");
             await StopQuietlyAsync().ConfigureAwait(false);
             return;
         }
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             if (Volatile.Read(ref stopping) != 0 || Volatile.Read(ref disposed) != 0) return;
-            Notice?.Invoke($"接收引擎退出（代码 {code}），正在重启引擎（第 {attempt} 次）…");
+            Notice?.Invoke($"引擎退出（代码 {code}），正在重启（第 {attempt} 次）…");
             try { await Task.Delay(TimeSpan.FromSeconds(attempt == 1 ? 1 : 3)).ConfigureAwait(false); }
             catch (Exception) { return; }
 
@@ -127,7 +127,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
                 if (engine is not null) return;
                 engine = StartEngine();
                 AppLog.Mark($"engine:restarted (attempt {attempt})");
-                Notice?.Invoke("接收引擎已恢复，无需重新初始化网卡。");
+                Notice?.Invoke("引擎已恢复，不用重新初始化网卡。");
                 return;
             }
             catch (Exception error)
@@ -137,7 +137,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
             finally { lifecycle.Release(); }
         }
         // The engine cannot come back on its own; rebuild everything.
-        Failed?.Invoke($"接收引擎反复退出（代码 {code}），正在重建无线链路。");
+        Failed?.Invoke($"接收引擎反复退出（代码 {code}），正在重建链路。");
         await StopQuietlyAsync().ConfigureAwait(false);
     }
 

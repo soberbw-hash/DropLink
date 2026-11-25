@@ -51,21 +51,21 @@ internal static class SetupGuide
             return new SetupGuideResult(
                 GuideStep.EnvironmentBlocked,
                 "软件文件不完整",
-                "backend 文件夹没有放在软件目录里，补全后再打开一次。",
+                "请补全 backend 文件夹后再打开。",
                 "重新检查", true);
 
         if (!input.Authorized || !input.RecoveryVerified)
             return new SetupGuideResult(
                 GuideStep.NeedRestart,
                 "需要重新打开一次",
-                "点右上角 × 退出 DropLink，再重新打开。",
+                "点右上角 × 退出，再重新打开。",
                 "重新检查", true);
 
         if (input.SessionRunning)
             return new SetupGuideResult(
                 GuideStep.Receiving,
                 "正在接收",
-                "在 iPhone 上用隔空投送分享文件，选这台电脑。",
+                "在 iPhone 隔空投送里选这台电脑。",
                 "", false);
 
         // A chain that is still coming up is not "ready to start": saying so
@@ -75,27 +75,27 @@ internal static class SetupGuide
             return new SetupGuideResult(
                 GuideStep.Starting,
                 "正在初始化网卡",
-                "通常 1 分钟，偶尔要几分钟。完成后会自动开始接收，这期间不用点任何东西。",
+                "约 1 分钟，完成后自动开始接收。",
                 "", false);
 
         if (input.ReadyWinUsbCards == 0)
             return new SetupGuideResult(
                 GuideStep.SwitchDriver,
                 "配置一次，开始隔空投送",
-                "需要把这张无线网卡切换成 WinUSB。一次即可，随时可以回退。",
+                "需要把网卡切换成 WinUSB，只需一次。",
                 "开始配置", true);
 
         if (!input.HasLibusbTarget)
             return new SetupGuideResult(
                 GuideStep.Rescan,
                 "还差最后一步",
-                "把网卡拔下再插一次，让它重新被识别。",
+                "把网卡拔下再插一次，让它重新识别。",
                 "重新检查", true);
 
         return new SetupGuideResult(
             GuideStep.StartReceiving,
             "正在准备接收",
-            "条件已满足，正在自动开始，这期间不用点任何东西。",
+            "条件已满足，正在自动开始接收。",
             "开启接收", true);
     }
 }
