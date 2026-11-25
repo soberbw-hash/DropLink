@@ -540,14 +540,6 @@ class Receiving:
                 return False
         logging.info('receiving as %s on port %d into %s', self.settings.name,
                      self.settings.port, self.settings.dest)
-        # Files that arrived before the staging folder stopped handing down
-        # its owner-only DACL are still on disk, unreadable to the person who
-        # received them. This is the only account that can fix them, and it
-        # is already running.
-        repaired = transfer.repair_permissions(self.settings.dest)
-        if repaired:
-            logging.info('gave %d previously received file(s) back their '
-                         'folder permissions', repaired)
         self._say(True)
         return True
 
@@ -1022,6 +1014,14 @@ def main(argv=None):
             logging.info('engine log -> %s', os.path.join(log_dir, 'engine.log'))
         except OSError:
             pass
+    # Files received while the staging folder still handed down its
+    # owner-only DACL are on disk and unreadable to the person who received
+    # them. This process is the one with the rights to fix them, and it would
+    # otherwise sit quiet until a link appears - so do it now, not on link up.
+    repaired = transfer.repair_permissions(args.dest)
+    if repaired:
+        logging.info('gave %d previously received file(s) back their folder '
+                     'permissions', repaired)
     events = Events(sys.stdout)
     try:
         engine = Engine(args, events)
