@@ -207,17 +207,32 @@ public partial class MainWindow : Window
             settingsWindow.Activate();
             return;
         }
-        var page = new SettingsWindow(ApplyDeviceNameAsync, ApplyReceiveFolderAsync, ClearHistory);
-        if (IsVisible)
+        try
         {
-            page.Owner = this;
-            page.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            var page = new SettingsWindow(ApplyDeviceNameAsync, ApplyReceiveFolderAsync, ClearHistory);
+            if (IsVisible)
+            {
+                page.Owner = this;
+                page.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            }
+            else page.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            page.Closed += (_, _) => settingsWindow = null;
+            settingsWindow = page;
+            page.Show();
+            page.Activate();
         }
-        else page.WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        page.Closed += (_, _) => settingsWindow = null;
-        settingsWindow = page;
-        page.Show();
-        page.Activate();
+        catch (Exception error)
+        {
+            // A window that cannot be constructed used to disappear into the
+            // dispatcher log: the gear was clicked and nothing happened at all.
+            // That is indistinguishable from a dead button, so say what happened
+            // and what fixes it.
+            AppLog.WriteException("settings window", error);
+            failure = "设置窗口打不开";
+            failureHint = "关掉 DropLink 再打开一次。";
+            Render();
+            tray?.Notify("设置窗口打不开", "关掉 DropLink 再打开一次。");
+        }
     }
 
     private async Task<bool> ApplyDeviceNameAsync(string name)
@@ -436,12 +451,22 @@ public partial class MainWindow : Window
         try
         {
             AppLog.Write("watching for a usable radio");
+            // Each round runs a PowerShell PnP query plus a backend probe, so a
+            // flat ten-second beat meant paying that forever on a machine whose
+            // card is simply unplugged. Back off to a minute: a card that gets
+            // plugged in is still noticed within it, and an idle window stops
+            // spawning processes while nobody is watching.
+            var wait = TimeSpan.FromSeconds(10);
             while (!exitRequested && !paused && session is null)
             {
-                await Task.Delay(TimeSpan.FromSeconds(10));
+                await Task.Delay(wait);
                 if (exitRequested || paused || session is not null) return;
                 await CheckReadinessAsync();
-                if (currentStep != GuideStep.StartReceiving) continue;
+                if (currentStep != GuideStep.StartReceiving)
+                {
+                    wait = TimeSpan.FromSeconds(Math.Min(wait.TotalSeconds * 2, 60));
+                    continue;
+                }
                 restartAttempts = 0;
                 await StartReceiveAsync(silent: true);
                 return;

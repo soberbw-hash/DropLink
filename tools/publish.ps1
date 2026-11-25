@@ -45,29 +45,25 @@ if (-not (Test-Path -LiteralPath $exe)) { throw ('missing ' + $exe) }
 
 if (-not (Test-Path -LiteralPath $Target)) { New-Item -ItemType Directory -Path $Target -Force | Out-Null }
 $dest = Join-Path $Target 'DropLink.exe'
-# A running DropLink holds its own image, so it cannot be overwritten - but it
-# can be renamed, which is how an update lands without asking the user to quit
-# first. The renamed copy is only ever used by the process that is already
-# running; the file on disk is the new build. It is cleaned up here on the next
-# publish, once nothing holds it.
+
+# Refuse to replace the image of a process that is still running.
+#
+# This used to rename the old file and drop the new one in its place, so an
+# update landed without asking anyone to quit. A running process survives that,
+# but it can no longer load its own files, and the symptoms are confusing:
+# opening the settings window throws FileNotFoundException from inside WPF, and
+# so does closing the app. Nobody can tell that from a real product fault while
+# looking at it, so the tool stops creating the situation.
+$running = @(Get-Process -Name 'DropLink' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+if ($running.Count -gt 0) {
+    throw ('DropLink is still running (pid ' + ($running -join ', ') + '). Quit it first, then publish again. Replacing the image under a live process leaves that process unable to load its own resources.')
+}
+Copy-Item -LiteralPath $exe -Destination $dest -Force
+
+# Left behind by an older revision of this script.
 $old = Join-Path $Target 'DropLink.exe.old'
 if (Test-Path -LiteralPath $old) {
     try { Remove-Item -LiteralPath $old -Force } catch { }
-}
-$renamed = $false
-try {
-    Copy-Item -LiteralPath $exe -Destination $dest -Force
-} catch {
-    try {
-        Move-Item -LiteralPath $dest -Destination $old -Force
-        Copy-Item -LiteralPath $exe -Destination $dest -Force
-        $renamed = $true
-    } catch {
-        $pids = @(Get-Process -Name 'DropLink' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-        $who = ''
-        if ($pids.Count -gt 0) { $who = ' (running pid ' + ($pids -join ', ') + ')' }
-        throw ('cannot replace ' + $dest + ': DropLink is running' + $who + '. Quit DropLink first, then publish again.')
-    }
 }
 
 # Ship the icon next to the executable, not only inside it. The .ico is what a
@@ -149,7 +145,6 @@ if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
 $info = Get-Item -LiteralPath (Join-Path $Target 'DropLink.exe')
 Write-Output ('OK ' + $info.FullName)
 Write-Output ('bytes=' + $info.Length)
-if ($renamed) { Write-Output ('note=replaced while running; old image renamed to ' + $old) }
 foreach ($extra in @('DropLink.ico', 'icon-source.png')) {
     $path = Join-Path $Target $extra
     if (Test-Path -LiteralPath $path) {

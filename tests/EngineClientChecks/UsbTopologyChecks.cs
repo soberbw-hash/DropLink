@@ -14,7 +14,7 @@ internal static class UsbTopologyChecks
         if (!condition) throw new Exception("UsbTopology: " + message);
     }
 
-    internal static void Run()
+    internal static void Run(string temp)
     {
         // ID parsing, including composite MI and case-insensitivity.
         Require(UsbTopology.TryParseHardwareId("USB\\VID_0BDA&PID_C820&MI_02\\inst", out var vid, out var pid, out var mi)
@@ -100,6 +100,31 @@ internal static class UsbTopologyChecks
         Require(picked.Selected && picked.Device == cards[1], "inventory feeds topology to pick correct card");
         Require(DeviceInventory.Parse("{}").Error is not null, "reject non-array inventory");
         Require(DeviceInventory.Parse("not json").Error is not null, "reject malformed inventory");
+
+        // The enumeration capability is decided from the binary, before any
+        // process is started: the bundled backend predates --list-devices, and
+        // spawning it on every probe only to read a usage line is how a missing
+        // feature turned into a fault report.
+        var withoutFlag = Path.Combine(temp, "radio-legacy.exe");
+        File.WriteAllText(withoutFlag, "usage: airbridge_radio <channel> [width_mhz] [port]");
+        Require(!DeviceInventory.SupportsEnumeration(withoutFlag), "a build without the flag is detected");
+        // Read must stop at the capability check. If it went on to start the
+        // file it would throw, so "returns an error" also means "started nothing".
+        var legacy = DeviceInventory.Read(withoutFlag);
+        Require(legacy.Error is not null && legacy.Devices.Count == 0,
+            "a legacy backend reports why it cannot enumerate, without being started");
+
+        var withFlag = Path.Combine(temp, "radio-patched.exe");
+        File.WriteAllText(withFlag, "airbridge_radio --list-devices ... padding ...");
+        Require(DeviceInventory.SupportsEnumeration(withFlag), "a build with the flag is detected");
+
+        // Rebuilding the backend in place must be noticed; the answer is cached
+        // against the file it came from.
+        File.WriteAllText(withoutFlag, "usage line ... now with --list-devices appended");
+        Require(DeviceInventory.SupportsEnumeration(withoutFlag), "cache follows a rebuilt binary");
+
+        Require(!DeviceInventory.SupportsEnumeration(Path.Combine(temp, "nope.exe")),
+            "a missing backend does not claim support");
 
         // C811 is non-composite: a whole-device WinUSB binding has no MI suffix.
         // A composite-style C811 should be rejected, while the plain C811 binds.

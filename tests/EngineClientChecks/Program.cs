@@ -85,7 +85,7 @@ try
     RadioPreflightChecks.Run(temp);
     ReadinessReportChecks.Run(temp);
     SetupGuideChecks.Run(temp);
-    UsbTopologyChecks.Run();
+    UsbTopologyChecks.Run(temp);
     ProcessJobChecks.Run();
     if (OperatingSystem.IsWindows()) SingleInstanceChecks.Run();
     else Console.WriteLine("SKIP: single instance is Windows-only");

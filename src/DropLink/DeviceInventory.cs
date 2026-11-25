@@ -13,10 +13,57 @@ internal static class DeviceInventory
 {
     internal sealed record Result(IReadOnlyList<UsbDeviceSnapshot> Devices, string? Error);
 
+    /// <summary>
+    /// Whether this backend can enumerate devices at all.
+    ///
+    /// The bundled <c>airbridge_radio.exe</c> predates <c>--list-devices</c>: it
+    /// prints its usage line and exits. Asking it anyway runs a process on every
+    /// readiness probe - and the window probes every ten seconds while it waits
+    /// for a card - then records "枚举失败", which reads like a fault when it is
+    /// only a missing feature. The flag is a literal in the binary, so the file
+    /// answers the question without starting anything. Cached per file identity:
+    /// a rebuilt backend must be noticed without a restart.
+    /// </summary>
+    private static readonly Dictionary<string, (long Length, DateTime Stamp, bool Supported)> supportCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal static bool SupportsEnumeration(string radioExecutable)
+    {
+        string full;
+        FileInfo info;
+        try
+        {
+            full = Path.GetFullPath(radioExecutable);
+            info = new FileInfo(full);
+            if (!info.Exists) return false;
+        }
+        catch (Exception) { return false; }
+
+        if (supportCache.TryGetValue(full, out var cached)
+            && cached.Length == info.Length && cached.Stamp == info.LastWriteTimeUtc)
+            return cached.Supported;
+
+        bool supported;
+        try
+        {
+            var bytes = File.ReadAllBytes(full);
+            supported = bytes.AsSpan().IndexOf("--list-devices"u8) >= 0;
+        }
+        catch (Exception) { supported = false; }
+
+        supportCache[full] = (info.Length, info.LastWriteTimeUtc, supported);
+        return supported;
+    }
+
     internal static Result Read(string radioExecutable)
     {
         if (!File.Exists(radioExecutable))
             return new Result([], "后端程序不存在：" + radioExecutable);
+        if (!SupportsEnumeration(radioExecutable))
+            // Not an error: this build simply opens by VID/PID. ReadinessProbe
+            // falls back to the single-card path, and refuses to start when two
+            // supported cards are present rather than guess between them.
+            return new Result([], "这个后端不支持设备枚举（历史构建），按 VID/PID 打开");
         var info = new ProcessStartInfo(Path.GetFullPath(radioExecutable))
         {
             UseShellExecute = false, CreateNoWindow = true,
