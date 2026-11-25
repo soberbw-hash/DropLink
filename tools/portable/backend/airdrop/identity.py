@@ -2,9 +2,13 @@
 """The TLS identity this receiver presents: a self-signed certificate, which
 is all a sender needs when the receiver is visible to everyone."""
 import datetime
+import logging
 import os
 import shutil
 import subprocess
+import time
+
+import x509
 
 CERTIFICATE = 'certificate.self-signed.pem'
 KEY = 'key.self-signed.pem'
@@ -82,20 +86,55 @@ def _write_with_cryptography(certificate, key):
         .sign(private, hashes.SHA256()))
     # Write both halves through temporary names so a crash cannot leave a
     # certificate without its key (or the reverse) next to each other.
-    for path, data in (
-            (key, private.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption())),
-            (certificate, certificate_object.public_bytes(
-                serialization.Encoding.PEM))):
+    _write_pair(certificate, key,
+                certificate_object.public_bytes(serialization.Encoding.PEM),
+                private.private_bytes(serialization.Encoding.PEM,
+                                      serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()))
+    return True
+
+
+def _write_with_builtin(certificate, key):
+    """Create the pair with x509.py, which needs nothing but the standard
+    library.
+
+    This is the path that makes a clean Windows machine work at all. The
+    receiver ships an embedded Python with no site-packages, so there is no
+    `cryptography`; and a machine that has never installed Git for Windows has
+    no openssl.exe either. Requiring either one to receive a photo is how a
+    portable package ends up "not working on this computer" for reasons the
+    person holding it cannot possibly diagnose.
+
+    Takes about a second: an RSA-2048 key search plus one signature.
+    """
+    started = time.monotonic()
+    try:
+        certificate_der, key_der = x509.build(common_name='AirDrop receiver',
+                                              days=int(VALID_DAYS))
+    except Exception as error:  # noqa: BLE001 - any failure means "fall through"
+        logging.warning('built-in certificate generation failed: %s', error)
+        return False
+    _write_pair(certificate, key, x509.pem('CERTIFICATE', certificate_der),
+                x509.pem('PRIVATE KEY', key_der))
+    logging.info('created a self-signed identity in %.1f s (built-in)',
+                 time.monotonic() - started)
+    return True
+
+
+def _write_pair(certificate, key, certificate_data, key_data):
+    """Write both halves through temporary names.
+
+    A crash between the two writes must not leave a certificate without its
+    key next to it: the next start would see both files present, return the
+    paths, and then fail the TLS handshake with no explanation.
+    """
+    for path, data in ((key, key_data), (certificate, certificate_data)):
         temporary = path + '.tmp'
         with open(temporary, 'wb') as out:
             out.write(data)
             out.flush()
             os.fsync(out.fileno())
         os.replace(temporary, path)
-    return True
 
 
 def ensure_self_signed(keys_dir):
@@ -107,6 +146,11 @@ def ensure_self_signed(keys_dir):
     os.makedirs(keys_dir, exist_ok=True)
     if _write_with_cryptography(certificate, key):
         return certificate, key
+    if _write_with_builtin(certificate, key):
+        return certificate, key
+    # Last resort only. Every machine reaches one of the two paths above, so
+    # this exists for the case where both were somehow broken, not as the
+    # normal way to get a certificate.
     config = os.path.join(keys_dir, 'request.cnf')
     with open(config, 'w', encoding='ascii') as out:
         out.write(REQUEST_CONFIG)

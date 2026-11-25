@@ -19,10 +19,10 @@ BINARIES = [
     'backend/python/python.exe',
 ]
 
-# Modules that come from the pinned upstream source, not from this repository.
-# The repo only carries the patched engine.py/receiver.py/transfer.py overlay, so
-# a source-only check cannot require them; an assembled package must have them or
-# the engine cannot even import (identity.py is the first failure).
+# Modules the engine imports at startup. Most come from the pinned upstream
+# source; x509.py is ours. They are all tracked now, but an assembled package
+# still has to be checked for them: a missing one makes the engine fail on its
+# very first import, which the user sees as "the app does not start".
 UPSTREAM_ENGINE_MODULES = [
     'backend/airdrop/cpio.py',
     'backend/airdrop/identity.py',
@@ -30,6 +30,10 @@ UPSTREAM_ENGINE_MODULES = [
     'backend/airdrop/netif.py',
     'backend/airdrop/redact.py',
     'backend/airdrop/sender.py',
+    # Standard-library-only certificate generation. Without it a machine that
+    # has neither `cryptography` nor openssl.exe cannot create its TLS identity
+    # and the engine exits 2 on first start.
+    'backend/airdrop/x509.py',
 ]
 
 REQUIRED = [
