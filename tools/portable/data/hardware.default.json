@@ -1,0 +1,30 @@
+{
+  "_comment": "DropLink 硬件策略。allow_untested=false 时只有 verified 设备会被 RadioPreflight 接受；修改后重启软件生效。",
+  "allow_untested": false,
+  "devices": [
+    {
+      "name": "Realtek RTL8811CU",
+      "hardware_id": "USB\\VID_0BDA&PID_C811",
+      "vid_pid": "0BDA:C811",
+      "driver_service": "WinUSB",
+      "mode": "dedicated_usb",
+      "status": "verified",
+      "windows_builds": [ "10.0.26100+" ],
+      "channels": [ 149 ],
+      "evidence": "docs/HARDWARE_COMPATIBILITY.md",
+      "notes": "专用于隔空投送接收。切换到 WinUSB 后，上网需要使用其他网卡或有线网络。"
+    },
+    {
+      "name": "Realtek RTL8821CU (MI_02)",
+      "hardware_id": "USB\\VID_0BDA&PID_C820&MI_02",
+      "vid_pid": "0BDA:C820",
+      "driver_service": "WinUSB",
+      "mode": "dedicated_usb",
+      "status": "upstream_only",
+      "windows_builds": [],
+      "channels": [],
+      "evidence": "docs/HARDWARE_COMPATIBILITY.md",
+      "notes": "仅有上游历史证据，本项目未验证；默认不允许，置 allow_untested=true 才可用。"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+.prepared/
+**/bin/
+**/obj/
+out/
+__pycache__/
+*.pyc
+launch-log.txt
+tools/portable/app/
+
+# The shipped package lives in the same folder as the source now, so the
+# runtime parts have to be ignored here. They are binaries and per-machine
+# data: backend\ is assembled by tools/publish.ps1, data\ holds the files the
+# user received, _backup\ holds the driver kit, licenses\ is copied from the
+# release. None of it belongs in git.
+/app/
+/backend/
+/data/
+/_backup/
+/licenses/
+/启动 DropLink.lnk
+/使用说明.txt
+
+# Written at runtime by the toast button helper.
+tools/portable/backend/airdrop/toast-action.log
+
+# Local handoffs, field notes, diagnostic captures and runtime data.
+/evidence/
+/docs/HANDOFF*.md
+/docs/交接*.md
+/docs/现场排查*.md
+/runtime/
+/outputs/
