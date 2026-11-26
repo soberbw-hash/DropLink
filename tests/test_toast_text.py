@@ -18,6 +18,14 @@ import engine
 
 
 class ToastTextTests(unittest.TestCase):
+    def test_failure_text_is_short_and_storage_is_not_blame_assigned_to_phone(self):
+        self.assertEqual(engine.failure_toast_text('storage failed: unsupported'),
+                         ('文件保存失败', '请检查保存位置后重试。'))
+        for reason in ('storage failed: unsupported', 'unexpected error ' * 40, None):
+            for line in engine.failure_toast_text(reason):
+                self.assertLessEqual(engine._toast_width(line), engine.TOAST_LINE_WIDTH)
+                self.assertNotIn('\n', line)
+
     def test_single_file_is_the_name_alone(self):
         title, body = engine.toast_text(['IMG_0001.PNG'])
         self.assertEqual(title, 'IMG_0001.PNG')

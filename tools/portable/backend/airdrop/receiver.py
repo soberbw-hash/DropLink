@@ -314,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == '/Discover':
             self.answer(self.identity_plist())
+            logging.info('discovery request answered')
         else:
             self.handle_ask(body)
 
@@ -362,16 +363,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not transfer.is_web_link(item):
                     logging.warning('ask: ignoring non-web item %.80r', item)
                     continue
-                stored = transfer.store_link(item, self.server.settings.dest)
+                stored = transfer.store_link(item, getattr(self.accepted, 'folder', None) or self.server.settings.dest)
                 logging.info('link stored as %s', stored)
                 links.append(stored)
             watcher.stored(self.accepted, links)
         self.answer(self.identity_plist())
 
-    def receive_archive(self, raw, budget, plan, deadline, tid, on_progress):
+    def receive_archive(self, raw, budget, plan, deadline, tid, on_progress, dest):
         """Store the upload's files; returns their names and whether the body
         ended. An iPhone never ends the body of a video or a Live Photo."""
-        dest = self.server.settings.dest
 
         def expect_little_more():
             deadline.idle_seconds = transfer.END_MARKER_WAIT_SECONDS
@@ -415,11 +415,13 @@ class Handler(BaseHTTPRequestHandler):
             self.reject_unread_upload(DECLINED_STATUS, f'upload {tid} follows no accepted ask')
             return
         deadline = transfer.ReadDeadline()
+        upload_start = time.monotonic()
         plan = None
         refused = None
         TRANSFER_BUSY.set()
         try:
-            budget = transfer.ReceiveBudget(settings.dest, settings.max_receive_percent)
+            dest = getattr(token, 'folder', None) or settings.dest
+            budget = transfer.ReceiveBudget(dest, settings.max_receive_percent)
             plan = transfer.body_plan(self.headers, budget.byte_limit)
             logging.info('upload %s: sender announces %s bytes; %d%% of %d '
                          'free bytes allows %d', tid,
@@ -428,11 +430,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Expect', '').lower() == '100-continue':
                 self.send_response_only(100)
                 self.end_headers()
-            with tempfile.TemporaryFile(dir=settings.dest) as raw:
+            with tempfile.TemporaryFile(dir=dest) as raw:
                 written, ended = self.receive_archive(
                     raw, budget, plan, deadline, tid,
-                    lambda done: watcher.upload_progress(token, done))
-            logging.info('upload %s: stored %s', tid, ', '.join(written))
+                    lambda done: watcher.upload_progress(token, done), dest)
+            logging.info('upload %s: stored %s; archive_bytes=%d upload_to_store_ms=%.0f',
+                         tid, ', '.join(written), deadline.transferred,
+                         (time.monotonic() - upload_start) * 1000)
         except TimeoutError as error:
             expected = plan[1] if plan else None
             refused = 408, f'upload {tid}: {deadline.stall_report(error, expected)}'
@@ -599,12 +603,14 @@ RECV_TIMEOUT_S = 0.004
 # silent for the four seconds a photo takes is long enough for the phone to
 # drop the entry, and then the *next* AirDrop sheet shows nothing at all.
 TRANSFER_ANNOUNCE_S = 0.3
+GOODBYE_GRACE_S = 1.0  # RFC 6762 section 10.1
+RETIREMENT_ANNOUNCE_S = 1.1  # Cover a full AWDL channel sequence.
 # Set once an upload has been stored. The phone marks a receiver it has just
 # received from and stops listing it for a while, so the next sheet comes up
 # empty even though the radio is still there. Rotating the Service instance ID
 # sidesteps that cache: the records look like a brand-new receiver, while the
 # display name (which travels in the TLS/Discover answer, not in mDNS) stays
-# the same, so nothing changes on screen.
+# the same.
 ROTATE_REQUEST = threading.Event()
 
 
@@ -623,6 +629,11 @@ class ProxyAnnouncer:
                                        daemon=True)
 
     def start(self):
+        try:
+            self.sock.send(self.service.response())
+        except OSError:
+            self.sock.close()
+            raise
         self.thread.start()
 
     def stop(self):
@@ -641,10 +652,10 @@ class ProxyAnnouncer:
         the Discover answer, so only the mDNS instance changes here - the phone
         sees a receiver it has not just received from and lists it again.
         """
-        try:
-            self.sock.send(self.service.response(alive=False))
-        except OSError:
-            pass
+        self.sock.send(self.service.response(alive=False))
+        if self.stopping.wait(GOODBYE_GRACE_S):
+            return None
+        old_instance = self.service.instance_name
         try:
             new_id = rotate_service_id(self.store_dir)
             self.service = mdns.Service(
@@ -653,31 +664,45 @@ class ProxyAnnouncer:
             logging.info('service id rotated to %s after a completed upload', new_id)
         except Exception as error:
             logging.warning('could not rotate the service id: %s', error)
-        return self.service.response()
+        return self.service.response(retiring_instance=old_instance)
 
     def _run(self):
+        try:
+            self._announce()
+        except OSError as error:
+            if not self.stopping.is_set():
+                logging.warning('mDNS proxy stopped: %s', error)
+
+    def _announce(self):
         response = self.service.response()
         # An iPhone that has just opened the AirDrop sheet may miss the first
         # AWDL slot; a short, dense burst makes the receiver appear before the
         # phone's sheet gives up on the scan.
-        for _ in range(10):
+        for _ in range(9):
             self.sock.send(response)
             time.sleep(0.03)
-        next_announce = time.time() + ANNOUNCE_INTERVAL_S
+        next_announce = time.monotonic() + ANNOUNCE_INTERVAL_S
+        retire_until = None
         while not self.stopping.is_set():
             if ROTATE_REQUEST.is_set():
                 ROTATE_REQUEST.clear()
                 response = self._rotate()
+                if response is None:
+                    return
+                retire_until = time.monotonic() + RETIREMENT_ANNOUNCE_S
                 for _ in range(10):
                     self.sock.send(response)
                     time.sleep(0.03)
-                next_announce = time.time() + ANNOUNCE_INTERVAL_S
+                next_announce = time.monotonic() + ANNOUNCE_INTERVAL_S
                 continue
+            if retire_until is not None and time.monotonic() >= retire_until:
+                response = self.service.response()
+                retire_until = None
             if TRANSFER_BUSY.is_set():
                 # Uploading: keep a slow announce so the entry does not lapse.
-                if time.time() >= next_announce:
+                if time.monotonic() >= next_announce:
                     self.sock.send(response)
-                    next_announce = time.time() + TRANSFER_ANNOUNCE_S
+                    next_announce = time.monotonic() + TRANSFER_ANNOUNCE_S
                 time.sleep(0.05)
                 continue
             self.sock.settimeout(RECV_TIMEOUT_S)
@@ -685,8 +710,6 @@ class ProxyAnnouncer:
                 packet = self.sock.recv(9000)
             except (TimeoutError, socket.timeout):
                 packet = None
-            except OSError:
-                break
             if packet:
                 asked = mdns.question_names(packet) & self.service.names()
                 if asked:
@@ -697,11 +720,11 @@ class ProxyAnnouncer:
                     # a bad CRC and a single lost copy costs a whole round.
                     for _ in range(4):
                         self.sock.send(response)
-                    next_announce = time.time() + ANNOUNCE_INTERVAL_S
-            if time.time() >= next_announce:
+                    next_announce = time.monotonic() + ANNOUNCE_INTERVAL_S
+            if time.monotonic() >= next_announce:
                 self.sock.send(response)
                 self.sock.send(response)
-                next_announce = time.time() + ANNOUNCE_INTERVAL_S
+                next_announce = time.monotonic() + ANNOUNCE_INTERVAL_S
 
 
 def main(argv=None):

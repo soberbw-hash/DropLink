@@ -11,6 +11,9 @@ import engine
 
 
 class EngineDirectoryTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(mock.patch.object(engine, 'load_settings', return_value={}))
+
     def test_explicit_output_does_not_validate_unused_default(self):
         original = engine.receiver.valid_dir
         def reject_unused_default(value):

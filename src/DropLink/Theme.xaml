@@ -15,7 +15,7 @@
  <!-- Text -->
  <SolidColorBrush x:Key="TextPrimary" Color="#17212B"/>
  <SolidColorBrush x:Key="TextSecondary" Color="#687386"/>
- <SolidColorBrush x:Key="TextTertiary" Color="#9AA5B5"/>
+ <SolidColorBrush x:Key="TextTertiary" Color="#657184"/>
 
  <!-- Semantics -->
  <SolidColorBrush x:Key="Brand" Color="#1677F2"/>
@@ -34,7 +34,7 @@
   <Setter Property="TextAlignment" Value="Center"/>
  </Style>
  <Style x:Key="BodyText" TargetType="TextBlock">
-  <Setter Property="FontSize" Value="13.5"/>
+  <Setter Property="FontSize" Value="14"/>
   <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
   <Setter Property="TextWrapping" Value="Wrap"/>
  </Style>
@@ -43,7 +43,7 @@
   <Setter Property="Foreground" Value="{StaticResource TextTertiary}"/>
  </Style>
  <Style x:Key="RowTitle" TargetType="TextBlock">
-  <Setter Property="FontSize" Value="14.5"/>
+  <Setter Property="FontSize" Value="14"/>
   <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
   <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
  </Style>
@@ -67,7 +67,7 @@
  <Style x:Key="PrimaryButton" TargetType="Button">
   <Setter Property="Background" Value="{StaticResource Brand}"/>
   <Setter Property="Foreground" Value="White"/>
-  <Setter Property="FontSize" Value="13.5"/>
+  <Setter Property="FontSize" Value="14"/>
   <Setter Property="FontWeight" Value="Medium"/>
   <Setter Property="Padding" Value="22,9"/>
   <Setter Property="Cursor" Value="Hand"/>

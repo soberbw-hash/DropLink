@@ -1,6 +1,7 @@
-using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.IO;
-using System.Text.Json;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DropLink;
 
@@ -43,7 +44,7 @@ internal static class ReadinessProbe
         var devices = await DevicesAsync();
         var files = RequiredFilePaths();
         var radioExe = Environment.GetEnvironmentVariable("DROPLINK_RADIO_EXE") ?? "";
-        var inventory = string.IsNullOrWhiteSpace(radioExe)
+        var inventory = !devices.Any(IsReadyCard) || string.IsNullOrWhiteSpace(radioExe)
             ? new DeviceInventory.Result([], "未配置后端程序路径")
             : await Task.Run(() => DeviceInventory.Read(radioExe));
         var (pnp, target, legacy) = PickTarget(devices, inventory);
@@ -88,48 +89,63 @@ internal static class ReadinessProbe
         return (ready[0], null, false);
     }
 
-    internal static async Task<IReadOnlyList<RadioDevice>> DevicesAsync()
+    internal static Task<IReadOnlyList<RadioDevice>> DevicesAsync() => Task.Run(EnumerateUsb);
+
+    private static IReadOnlyList<RadioDevice> EnumerateUsb()
     {
-        const string script = "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match '^USB\\\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}' } | ForEach-Object { $id=$_.InstanceId; $svc=(Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data; $loc=(Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction SilentlyContinue).Data; [pscustomobject]@{ InstanceId=$id; Hardware=($id -replace '^.*?(VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(?:&MI_[0-9A-F]{2})?).*','USB\\$1'); Service=[string]$svc; Status=$_.Status; Location=[string]$loc } } | ConvertTo-Json -Compress";
-        var info = new ProcessStartInfo("powershell.exe")
+        const uint presentUsb = 0x101; // CM_GETIDLIST_FILTER_ENUMERATOR | PRESENT
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command", script }) info.ArgumentList.Add(arg);
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("无法启动设备查询。");
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        try { await process.WaitForExitAsync(timeout.Token); }
-        catch (OperationCanceledException) { process.Kill(true); throw new TimeoutException("设备查询超时。"); }
-        var json = await stdout;
-        _ = await stderr;
-        if (process.ExitCode != 0) throw new InvalidOperationException("设备查询失败。");
-        if (string.IsNullOrWhiteSpace(json)) return [];
-        using var doc = JsonDocument.Parse(json);
-        var items = doc.RootElement.ValueKind == JsonValueKind.Array
-            ? doc.RootElement.EnumerateArray().ToArray()
-            : new[] { doc.RootElement };
-        var result = new List<RadioDevice>();
-        foreach (var item in items)
-        {
-            var hardware = item.GetProperty("Hardware").GetString() ?? "";
-            if (!System.Text.RegularExpressions.Regex.IsMatch(hardware,
-                    @"^USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
-            var location = item.TryGetProperty("Location", out var locProp) ? locProp.GetString() ?? "" : "";
-            result.Add(new RadioDevice(
-                item.GetProperty("InstanceId").GetString() ?? "",
-                hardware,
-                item.GetProperty("Service").GetString() ?? "",
-                item.GetProperty("Status").GetString() ?? "",
-                location));
+            Check(CM_Get_Device_ID_List_SizeW(out var length, "USB", presentUsb));
+            var buffer = new char[Math.Max(2, length)];
+            var result = CM_Get_Device_ID_ListW("USB", buffer, buffer.Length, presentUsb);
+            if (result == 0x1A) continue; // CR_BUFFER_SMALL after a hot plug.
+            Check(result);
+            var devices = new List<RadioDevice>();
+            foreach (var instance in new string(buffer).Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var hardware = instance.Split('\\').ElementAtOrDefault(1);
+                if (hardware is null || !Regex.IsMatch(hardware, @"^VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&MI_[0-9A-F]{2})?$", RegexOptions.IgnoreCase))
+                    continue;
+                var located = CM_Locate_DevNodeW(out var node, instance, 0);
+                if (located == 0x0D) continue; // Device disappeared during enumeration.
+                Check(located);
+                var ok = CM_Get_DevNode_Status(out var flags, out var problem, node, 0) == 0
+                    && (flags & 0x400) == 0 && problem == 0;
+                devices.Add(new RadioDevice(instance, "USB\\" + hardware, Property(node, 5),
+                    ok ? "OK" : "Unknown", Property(node, 14)));
+            }
+            return devices;
         }
-        return result;
+        throw new IOException("USB 设备列表正在变化。");
     }
+
+    private static void Check(uint result)
+    {
+        if (result != 0) throw new IOException($"读取 USB 设备信息失败 (CONFIGRET 0x{result:X})。");
+    }
+
+    private static string Property(uint node, uint property)
+    {
+        uint bytes = 0;
+        if (CM_Get_DevNode_Registry_PropertyW(node, property, out _, null, ref bytes, 0) != 0x1A || bytes == 0)
+            return "";
+        var buffer = new byte[bytes];
+        return CM_Get_DevNode_Registry_PropertyW(node, property, out var type, buffer, ref bytes, 0) == 0 && type == 1
+            ? Encoding.Unicode.GetString(buffer, 0, (int)bytes).TrimEnd('\0') : "";
+    }
+
+    [DllImport("cfgmgr32", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint CM_Get_Device_ID_List_SizeW(out int length, string filter, uint flags);
+    [DllImport("cfgmgr32", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint CM_Get_Device_ID_ListW(string filter, [Out] char[] buffer, int length, uint flags);
+    [DllImport("cfgmgr32", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint CM_Locate_DevNodeW(out uint node, string instance, uint flags);
+    [DllImport("cfgmgr32", ExactSpelling = true)]
+    private static extern uint CM_Get_DevNode_Status(out uint status, out uint problem, uint node, uint flags);
+    [DllImport("cfgmgr32", ExactSpelling = true)]
+    private static extern uint CM_Get_DevNode_Registry_PropertyW(uint node, uint property, out uint type,
+        [Out] byte[]? buffer, ref uint bytes, uint flags);
 
     internal static string LogTail(string path, int lines = 12)
     {

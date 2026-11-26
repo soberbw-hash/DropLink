@@ -161,7 +161,7 @@ public partial class SetupWindow : Window
         StepTitle.Text = "接收偏好";
         StepDetail.Text = "这三项随时可以在设置里改，现在只是先定一个默认值。";
         PreferenceCard.Visibility = Visibility.Visible;
-        AutoReceiveSwitch.IsChecked = SettingsFile.Flag("auto_receive", true);
+        AutoReceiveSwitch.IsChecked = SettingsFile.Flag("auto_receive", false);
         NameBox.Text = preview ? "" : SettingsFile.Text("device_name");
         FolderText.Text = FolderForDisplay();
         NextButton.Content = "保存并继续";

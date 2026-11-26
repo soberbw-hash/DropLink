@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 import uuid
@@ -29,6 +30,15 @@ import receiver
 import sender
 import transfer
 from test_engine import Heard
+
+
+class TransferIdTests(unittest.TestCase):
+    def test_first_transfers_after_engine_restart_get_distinct_history_ids(self):
+        def first_transfer():
+            incoming = engine.Incoming(Heard(), types.SimpleNamespace(auto_receive=False))
+            return incoming._open('iPhone', None, [], 0, False).key
+
+        self.assertNotEqual(first_transfer(), first_transfer())
 
 
 class RejectedUploadTests(unittest.TestCase):
@@ -55,6 +65,9 @@ class RejectedUploadTests(unittest.TestCase):
 
 class ProxyModeTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(mock.patch.object(engine, 'load_settings', return_value={}))
+        self.enterContext(mock.patch.object(engine, 'notify_received'))
+        self.enterContext(mock.patch.object(engine, 'notify_failed'))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
@@ -127,6 +140,39 @@ class ProxyModeTests(unittest.TestCase):
         self.assertFalse(any(event['event'] == 'stored' for event in self.heard.events))
         self.assertEqual(list(self.dest.iterdir()), [])
 
+    def test_live_auto_receive_requires_matching_saved_preference(self):
+        with mock.patch.object(engine, 'load_settings', return_value={'auto_receive': False}):
+            self.instance.handle({'do': 'set', 'auto_receive': True, 'request_id': 'a'})
+            self.assertIn('auto_receive', self.heard.wait('settings', request_id='a')['refused'])
+        for enabled in (True, False):
+            with mock.patch.object(engine, 'load_settings', return_value={'auto_receive': enabled}):
+                self.instance.handle({'do': 'set', 'auto_receive': enabled})
+                self.assertEqual(self.heard.wait('settings')['refused'], {})
+                self.assertEqual(self.instance.settings.ask, not enabled)
+
+    def test_folder_change_keeps_accepted_transfer_destination(self):
+        incoming = self.instance.incoming
+        other = self.root / 'other'
+        other.mkdir()
+        source = self.root / 'photo.jpg'
+        source.write_bytes(b'folder switch test')
+        original = incoming.upload_started
+
+        def change_folder(*args):
+            self.instance.handle({'do': 'set', 'folder': str(other), 'request_id': 'move'})
+            return original(*args)
+
+        with mock.patch.object(incoming, '_decision', return_value='accepted'):
+            results = []
+            with mock.patch.object(incoming, 'upload_started', side_effect=change_folder):
+                self.send(results, source)
+            self.assertEqual(self.heard.wait('settings', request_id='move')['folder'], str(other))
+            self.assertFalse((other / source.name).exists())
+            self.send(results, source)
+        self.assertEqual(results, [sender.SENT, sender.SENT])
+        for directory in (self.dest, other):
+            self.assertEqual((directory / source.name).read_bytes(), source.read_bytes())
+
     def test_proxy_rejects_disabling_confirmation(self):
         self.instance.handle({'do': 'set', 'ask': False})
         self.assertTrue(self.instance.settings.ask)
@@ -137,6 +183,23 @@ class ProxyModeTests(unittest.TestCase):
         self.heard.wait('link', up=False)
         self.heard.wait('receiving', on=False)
         self.assertIsNone(self.instance._found())
+
+    def test_discovery_worker_recovers_without_restarting_listener(self):
+        receiving = self.instance.receiving
+        server, thread, old = receiving.server, receiving.thread, receiving.announcer
+        old.stopping.set()
+        self.heard.wait('receiving', on=False, reason='announcement_stopped')
+        self.heard.wait('receiving', on=True)
+        self.assertIs(receiving.server, server)
+        self.assertIs(receiving.thread, thread)
+        self.assertIsNot(receiving.announcer, old)
+        self.udp.settimeout(2)
+        new_port = receiving.announcer.sock.getsockname()[1]
+        while True:
+            packet, source = self.udp.recvfrom(9000)
+            if source[1] == new_port:
+                self.assertEqual(packet, receiving.announcer.service.response())
+                break
 
 
 class AutoReceiveTests(unittest.TestCase):
@@ -149,6 +212,9 @@ class AutoReceiveTests(unittest.TestCase):
     """
 
     def setUp(self):
+        self.enterContext(mock.patch.object(engine, 'load_settings', return_value={}))
+        self.enterContext(mock.patch.object(engine, 'notify_received'))
+        self.enterContext(mock.patch.object(engine, 'notify_failed'))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
@@ -369,6 +435,45 @@ class ServiceIdentityTests(unittest.TestCase):
     """The receiver hides from a phone that has just received from it by
     rotating its mDNS instance ID. That only helps across restarts if the new
     ID is written down, so the rotation has to persist."""
+
+    def test_rotation_gives_cached_entry_time_and_retires_only_the_old_ptr(self):
+        mdns = receiver.mdns
+        with tempfile.TemporaryDirectory() as keys, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            udp.bind(('127.0.0.1', 0))
+            udp.settimeout(3)
+            old = mdns.Service(receiver.SERVICE_TYPE, '001122334455', '001122334455.local',
+                               'fe80::1234', 8771, 'flags=1')
+            ann = receiver.ProxyAnnouncer(old, udp.getsockname()[1], keys)
+            with mock.patch.object(receiver, 'ROTATE_REQUEST', threading.Event()) as rotate:
+                ann.start()
+                try:
+                    self.assertEqual(udp.recv(9000), old.response())
+                    rotate.set()
+                    deadline = time.monotonic() + 6
+                    goodbye = None
+                    replacement = None
+                    while time.monotonic() < deadline:
+                        packet = udp.recv(9000)
+                        now = time.monotonic()
+                        ptrs = [(value, ttl) for _, kind, ttl, value in mdns.response_records(packet)
+                                if kind == mdns.TYPE_PTR]
+                        if ptrs == [(old.instance_name.lower(), 0)]:
+                            goodbye = now
+                        active = [value for value, ttl in ptrs if ttl > 0]
+                        if active and active != [old.instance_name.lower()]:
+                            self.assertEqual(len(active), 1)
+                            if replacement is None:
+                                self.assertIsNotNone(goodbye)
+                                self.assertGreaterEqual(now - goodbye, receiver.GOODBYE_GRACE_S - 0.1)
+                                self.assertIn((old.instance_name.lower(), 0), ptrs)
+                                replacement = active[0]
+                            elif len(ptrs) == 1:
+                                self.assertEqual(active, [replacement])
+                                break
+                    else:
+                        self.fail('missing clean announcement after the handoff')
+                finally:
+                    ann.stop()
 
     def test_rotation_persists_across_a_restart(self):
         with tempfile.TemporaryDirectory() as keys:

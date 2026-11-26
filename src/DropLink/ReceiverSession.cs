@@ -87,11 +87,7 @@ internal sealed class ReceiverSession : IAsyncDisposable
     private void OnEngineExit(int code)
     {
         if (Volatile.Read(ref stopping) != 0 || Volatile.Read(ref disposed) != 0) return;
-        // Detach right away. The crashed client still owns the pipes and the
-        // process handle, and leaving it in `engine` would make the retry loop
-        // below mistake "old dead client" for "already restarted".
-        var dead = Interlocked.Exchange(ref engine, null);
-        if (dead is not null) _ = DisposeQuietlyAsync(dead);
+        EngineEvent?.Invoke(JsonSerializer.SerializeToElement(new { @event = "receiving", on = false, reason = "engine_exit" }));
         _ = RecoverEngineAsync(code);
     }
 
@@ -105,6 +101,17 @@ internal sealed class ReceiverSession : IAsyncDisposable
 
     private async Task RecoverEngineAsync(int code)
     {
+        // StartEngine can report an immediate exit before its caller has
+        // assigned the new client. Take ownership after startup releases the lock.
+        await lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!started || Volatile.Read(ref disposed) != 0 || engine is null) return;
+            var dead = engine;
+            engine = null;
+            _ = DisposeQuietlyAsync(dead);
+        }
+        finally { lifecycle.Release(); }
         // Repeated crashes point at a broken chain, not a one-off exit: stop
         // pretending and rebuild from the radio up.
         if (OverCrashBudget())
@@ -124,10 +131,10 @@ internal sealed class ReceiverSession : IAsyncDisposable
             try
             {
                 if (Volatile.Read(ref stopping) != 0 || Volatile.Read(ref disposed) != 0) return;
-                if (engine is not null) return;
+                if (!started || engine is not null) return;
                 engine = StartEngine();
                 AppLog.Mark($"engine:restarted (attempt {attempt})");
-                Notice?.Invoke("引擎已恢复，不用重新初始化网卡。");
+                Notice?.Invoke("接收引擎已启动，正在恢复接收服务。");
                 return;
             }
             catch (Exception error)
@@ -145,6 +152,18 @@ internal sealed class ReceiverSession : IAsyncDisposable
     {
         var current = engine ?? throw new InvalidOperationException("接收会话未启动。");
         return current.AnswerAsync(id, accept);
+    }
+
+    internal async Task ApplySettingAsync(string key, object value)
+    {
+        await lifecycle.WaitAsync();
+        try
+        {
+            var client = engine ?? throw new InvalidOperationException("接收引擎暂不可用。");
+            await client.ApplySettingAsync(key, value);
+            if (key == "folder" && launch is not null) launch = launch with { Output = (string)value };
+        }
+        finally { lifecycle.Release(); }
     }
 
     internal Task SetNameAsync(string name)

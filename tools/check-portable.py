@@ -11,12 +11,14 @@ BINARIES = [
     # shortcut needs, and the PNG is the design file; losing either means the
     # icon can only be recovered from version control.
     'app/DropLink.ico',
+    'app/DropLink-toast.png',
     'app/icon-source.png',
     'backend/airbridge_radio.exe',
     'backend/radio_pipe_bridge.exe',
     'backend/awdl_netd.exe',
     'backend/awdld.exe',
     'backend/python/python.exe',
+    'backend/python/pythonw.exe',
 ]
 
 # Modules the engine imports at startup. Most come from the pinned upstream
@@ -55,6 +57,7 @@ REQUIRED = [
     'backend/airdrop/notify.ps1',
     'backend/airdrop/toast-action.ps1',
     'backend/airdrop/toast-action.vbs',
+    'backend/airdrop/open_batch.py',
     'backend/airdrop/settings-tool.ps1',
     'backend/airdrop/test-card.ps1',
     'backend/airdrop/benchmark.ps1',
@@ -97,12 +100,25 @@ def main():
     parser.add_argument('--source-only', action='store_true',
                         help='check the repository skeleton; binaries are expected to be built later')
     args = parser.parse_args()
-    root = args.portable.resolve()
+    package = args.portable.resolve()
+    compact = (package / 'runtime').is_dir() and not args.source_only
+    root = package / 'runtime' if compact else package
     required = [item for item in REQUIRED if not (args.source_only and item in SKIP_SOURCE_ONLY)]
     if not args.source_only:
         required += UPSTREAM_ENGINE_MODULES
+    if compact:
+        required = [item for item in required if not item.startswith('_backup/工具/')
+                    and item not in ('启动 DropLink.lnk', 'app/DropLink.exe', 'app/icon-source.png')]
+        required += ['data/hardware.json', '_backup/droplink-driver/Switch-WinUSB.ps1',
+                     '_backup/droplink-driver/Restore-Driver.ps1']
     errors = []
     warnings = []
+    if compact:
+        expected = {'DropLink.exe', '使用说明.txt', 'runtime'}
+        if {item.name for item in package.iterdir()} != expected:
+            errors.append('portable root must contain DropLink.exe, 使用说明.txt and runtime')
+        if not (root / 'licenses').is_dir() or not any((root / 'licenses').glob('*.txt')):
+            errors.append('missing third-party notices')
     if not root.is_dir():
         print(f'FAIL: not a directory: {root}')
         return 1
@@ -129,7 +145,7 @@ def main():
             continue
         if not isinstance(value, dict):
             errors.append(f'{relative}: top level must be an object')
-    exe = root / 'app' / 'DropLink.exe'
+    exe = package / 'DropLink.exe' if compact else root / 'app' / 'DropLink.exe'
     if not args.source_only and exe.is_file() and exe.stat().st_size < 1024 * 1024:
         errors.append('app/DropLink.exe looks too small; publish may be incomplete')
     for relative in ('data/received', 'data/logs', 'data/keys'):

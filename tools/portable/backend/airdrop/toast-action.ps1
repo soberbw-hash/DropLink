@@ -85,20 +85,27 @@ try {
     $file   = From-B64 (Get-Param $Uri 'file')
 
     $row = Get-Batch $batch
+    $receiveFolder = Get-Setting 'receive_folder'
+    if (-not $receiveFolder) { $receiveFolder = Get-DataPath 'received' }
     $names = @()
     if ($row) {
         $folder = [string]$row.Folder
         $names = @($row.Files | Where-Object { $_ } | ForEach-Object { [string]$_ })
-    } elseif (Same-Folder $folder (Get-Setting 'receive_folder')) {
+    } elseif (Same-Folder $folder $receiveFolder) {
         # History was cleared or lost, but the path is inside the receive
         # folder - the only folder this handler is allowed to touch.
         if ($file) { $names = @($file) }
     } else {
-        $folder = Get-Setting 'receive_folder'
+        $folder = $receiveFolder
         Note ("batch {0} unknown and folder not trusted; using the receive folder" -f $batch)
     }
 
-    $existing = @($names | Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $folder $_)) })
+    $existing = @($names | Where-Object {
+        if ($_) {
+            $candidate = Join-Path $folder $_
+            (Inside-Folder $candidate $folder) -and (Test-Path -LiteralPath $candidate)
+        }
+    })
 
     if ($Uri -match '^droplink:clip') {
         # The payload is a list of received files. Copy the files themselves,

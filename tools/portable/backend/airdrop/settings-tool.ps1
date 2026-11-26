@@ -4,6 +4,11 @@ param([Parameter(Mandatory=$true)][string]$Action, [string]$Value = '')
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+$appExe = Join-Path $root 'app\DropLink.exe'
+if ((Split-Path -Leaf $root) -eq 'runtime') {
+    $compactExe = Join-Path (Split-Path -Parent $root) 'DropLink.exe'
+    if (Test-Path -LiteralPath $compactExe) { $appExe = $compactExe }
+}
 $settingsPath = Join-Path $root 'data\settings.json'
 $hardwarePath = Join-Path $root 'data\hardware.json'
 $logPath = Join-Path $root 'data\logs\engine.log'
@@ -111,7 +116,7 @@ function Run-Doctor {
     Write-Output ('computer=' + $env:COMPUTERNAME)
     Write-Output ('os=' + (OsLabel))
     Write-Output ('root=' + $root)
-    Write-Output ('app.exe=' + (FileState (Join-Path $root 'app\DropLink.exe')))
+    Write-Output ('app.exe=' + (FileState $appExe))
     Write-Output ('backend.radio=' + (FileState (Join-Path $root 'backend\airbridge_radio.exe')))
     Write-Output ('backend.bridge=' + (FileState (Join-Path $root 'backend\radio_pipe_bridge.exe')))
     Write-Output ('backend.netd=' + (FileState (Join-Path $root 'backend\awdl_netd.exe')))
@@ -183,7 +188,7 @@ function Get-DoctorData {
         computer = $env:COMPUTERNAME
         os       = (OsLabel)
         root     = $root
-        app      = [pscustomobject]@{ exe = (FileState (Join-Path $root 'app\DropLink.exe')) }
+        app      = [pscustomobject]@{ exe = (FileState $appExe) }
         backend  = [pscustomobject]@{
             radio  = (FileState (Join-Path $root 'backend\airbridge_radio.exe'))
             bridge = (FileState (Join-Path $root 'backend\radio_pipe_bridge.exe'))
@@ -237,7 +242,7 @@ switch ($Action) {
     'autostart-on' {
         # A logon scheduled task with the highest run level starts the receiver
         # elevated without a UAC prompt, so the tray appears quietly.
-        $exe = Join-Path $root 'app\DropLink.exe'
+        $exe = $appExe
         if (-not (Test-Path -LiteralPath $exe)) { throw ('missing ' + $exe) }
         $taskAction = New-ScheduledTaskAction -Execute $exe -Argument '--tray' -WorkingDirectory (Split-Path -Parent $exe)
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME

@@ -29,6 +29,10 @@ internal sealed class HistoryBatch
         }
     };
 
+    [JsonIgnore] public string Extension => Files.Length == 1 && Title.LastIndexOf('.') > 0
+        ? Path.GetExtension(Title) : "";
+    [JsonIgnore] public string NameStem => Title[..(Title.Length - Extension.Length)];
+
     [JsonIgnore] public string Subtitle => Bytes > 0 ? $"{TransferItem.Size(Bytes)} · {When}" : When;
 
     [JsonIgnore]

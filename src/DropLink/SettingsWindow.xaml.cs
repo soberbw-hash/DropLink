@@ -34,7 +34,7 @@ public partial class SettingsWindow : Window
 
     private readonly Func<string, Task<bool>>? applyDeviceName;
     private readonly Func<string, Task<bool>>? applyReceiveFolder;
-    private readonly Action? clearHistory;
+    private readonly Func<bool, Task<bool>>? applyAutoReceive;
     /// <summary>Screenshot mode. The page is committed to the repository as a
     /// PNG, so it must show sample values instead of this machine's folder and
     /// host name.</summary>
@@ -54,13 +54,15 @@ public partial class SettingsWindow : Window
     private const string SampleName = "我的电脑";
 
     internal SettingsWindow(Func<string, Task<bool>>? applyDeviceName,
-        Func<string, Task<bool>>? applyReceiveFolder = null, Action? clearHistory = null,
-        bool preview = false)
+        Func<string, Task<bool>>? applyReceiveFolder = null,
+        bool preview = false, Func<bool, Task<bool>>? applyAutoReceive = null)
     {
         InitializeComponent();
+        MaxHeight = Math.Min(MaxHeight, SystemParameters.WorkArea.Height);
+        MaxWidth = SystemParameters.WorkArea.Width;
         this.applyDeviceName = applyDeviceName;
         this.applyReceiveFolder = applyReceiveFolder;
-        this.clearHistory = clearHistory;
+        this.applyAutoReceive = applyAutoReceive;
         this.preview = preview;
         Loaded += async (_, _) => await LoadAsync();
     }
@@ -78,11 +80,6 @@ public partial class SettingsWindow : Window
         try { await LoadCoreAsync(); }
         finally
         {
-            loading = false;
-            // Has to run after loading is false: UpdateSaveState reads it, and
-            // called from inside LoadCoreAsync it would return immediately and
-            // leave the button whatever the XAML declared.
-            UpdateSaveState();
             ready.TrySetResult();
         }
     }
@@ -98,30 +95,31 @@ public partial class SettingsWindow : Window
             // so the placeholder is the name the phone will really show.
             DeviceNamePlaceholder.Text = preview ? SampleName : hostName;
             UpdateNamePlaceholder();
-            AutoReceiveSwitch.IsChecked = Bool("auto_receive", true);
-            LivePhotoSwitch.IsChecked = Bool("live_photo_still_copy", true);
-            FormatSwitch.IsChecked = Bool("show_format_in_notification", true);
+            AutoReceiveSwitch.IsChecked = Bool("auto_receive", false);
             FolderText.Text = preview ? SampleFolder : SettingsFile.ReceiveFolder();
             VersionText.Text = Version();
-            HistoryHint.Text = "首页显示最近三次。清空列表不会删除已经收到的文件。";
         }
         catch (Exception error)
         {
             SetNote("读取设置失败：" + error.Message, true);
         }
 
+        // The receive controls are interactive while the scheduled-task query
+        // runs. Only suppress their events while populating their values.
+        loading = false;
+        UpdateSaveState();
+
         // Reading the scheduled task takes a second or two of PowerShell; the
         // page is usable immediately and the switch fills in when it answers.
         AutostartSwitch.IsEnabled = false;
+        if (preview) { AutostartSwitch.IsEnabled = true; return; }
         var state = await Task.Run(() => RunTool("autostart-state"));
-        AutostartSwitch.IsEnabled = true;
         if (state.ExitCode == 0)
         {
             autostartState = state.Output.Trim().Equals("on", StringComparison.OrdinalIgnoreCase);
             AutostartSwitch.IsChecked = autostartState;
-            AutostartHint.Text = autostartState
-                ? "已开启。登录 Windows 后会在后台直接开始接收，不弹窗口、不弹 UAC。"
-                : "登录 Windows 后在后台开始接收，不弹窗口、不弹 UAC。";
+            AutostartSwitch.IsEnabled = true;
+
         }
         else
         {
@@ -129,7 +127,6 @@ public partial class SettingsWindow : Window
             // the opposite of the truth. The reason goes to the status line:
             // a script path inside a row hint runs under the switch.
             AutostartSwitch.IsEnabled = false;
-            AutostartHint.Text = "读不到开机启动状态，这个开关暂时不可用。";
             SetNote("开机启动状态读取失败：" + state.Output.Trim(), true);
         }
     }
@@ -171,26 +168,37 @@ public partial class SettingsWindow : Window
     private void WriteSettings() => SettingsFile.Save(settings);
 
     /// <summary>
-    /// The three receive switches. They are startup options - the engine reads
-    /// them when the receiver starts, and auto-receive cannot be flipped on a
-    /// running proxy-mode engine - so the note says when they take effect
-    /// instead of implying the change is already live.
+    /// Auto-receive is read at engine startup. The two presentation settings
+    /// are read when processing each transfer.
     /// </summary>
-    private void ReceiveSetting_Toggled(object sender, RoutedEventArgs e)
+    private async void ReceiveSetting_Toggled(object sender, RoutedEventArgs e)
     {
         if (loading) return;
+        var previous = Bool("auto_receive", false);
         try
         {
             settings["auto_receive"] = AutoReceiveSwitch.IsChecked == true;
-            settings["live_photo_still_copy"] = LivePhotoSwitch.IsChecked == true;
-            settings["show_format_in_notification"] = FormatSwitch.IsChecked == true;
             WriteSettings();
-            SetNote("已保存。这几项在下一次开始接收时生效。");
+            if (applyAutoReceive is not null)
+            {
+                AutoReceiveSwitch.IsEnabled = false;
+                SetNote("正在应用…");
+                var live = await applyAutoReceive(AutoReceiveSwitch.IsChecked == true);
+                SetNote(live ? "已生效。" : "已保存，下次接收时生效。");
+            }
+            else SetNote("已保存，下次收到文件时生效。");
         }
         catch (Exception error)
         {
-            SetNote("保存失败：" + error.Message, true);
+            loading = true;
+            AutoReceiveSwitch.IsChecked = previous;
+            loading = false;
+            settings["auto_receive"] = previous;
+            try { WriteSettings(); }
+            catch (Exception rollback) { SetNote("恢复设置失败：" + rollback.Message, true); return; }
+            SetNote("设置未获确认：" + error.Message, true);
         }
+        finally { AutoReceiveSwitch.IsEnabled = true; }
     }
 
     private async void DeviceName_Commit(object sender, RoutedEventArgs e) => await CommitNameAsync();
@@ -255,7 +263,7 @@ public partial class SettingsWindow : Window
 
     private async void Autostart_Toggled(object sender, RoutedEventArgs e)
     {
-        if (loading || applyingAutostart) return;
+        if (loading || applyingAutostart || !AutostartSwitch.IsEnabled) return;
         var want = AutostartSwitch.IsChecked == true;
         applyingAutostart = true;
         AutostartSwitch.IsEnabled = false;
@@ -266,9 +274,7 @@ public partial class SettingsWindow : Window
             if (result.ExitCode == 0)
             {
                 autostartState = want;
-                AutostartHint.Text = want
-                    ? "已开启。登录 Windows 后会在后台直接开始接收，不弹窗口、不弹 UAC。"
-                    : "登录 Windows 后在后台开始接收，不弹窗口、不弹 UAC。";
+
                 SetNote(want ? "已开启开机自动启动。" : "已关闭开机自动启动。");
             }
             else
@@ -353,21 +359,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void ClearHistory_Click(object sender, RoutedEventArgs e)
-    {
-        if (MessageBox.Show(this, "清空接收历史列表？\n\n已经收到的文件不会被删除。", "清空接收历史",
-                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
-            return;
-        try
-        {
-            clearHistory?.Invoke();
-            SetNote("列表已清空。文件还在原来的文件夹里。");
-        }
-        catch (Exception error) { SetNote("清空失败：" + error.Message, true); }
-    }
-
-    // Driver rollback lives here now instead of on the main window: it is a
-    // maintenance action, not something the daily screen should offer.
     private async void Rollback_Click(object sender, RoutedEventArgs e)
     {
         var script = Environment.GetEnvironmentVariable("DROPLINK_ROLLBACK_CMD") ?? "";
@@ -403,15 +394,9 @@ public partial class SettingsWindow : Window
         catch (Exception ex) { ShowResult("回退失败：" + ex.Message); }
     }
 
-    private void OpenFolder_Click(object sender, RoutedEventArgs e)
+    private async void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        var folder = Environment.GetEnvironmentVariable("DROPLINK_OUTPUT_DIR");
-        if (string.IsNullOrWhiteSpace(folder)) folder = Path.Combine(AppPaths.DataDirectory(), "received");
-        try
-        {
-            Directory.CreateDirectory(folder);
-            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true });
-        }
+        try { await SettingsFile.OpenReceiveFolderAsync(); }
         catch (Exception error) { ShowResult("打开文件夹失败：" + error.Message); }
     }
 

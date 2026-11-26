@@ -3,14 +3,13 @@ using System.Drawing;
 using System.IO;
 using System.Windows;
 using Forms = System.Windows.Forms;
+using SystemColors = System.Drawing.SystemColors;
 using MessageBox = System.Windows.MessageBox;
 
 namespace DropLink;
 
 /// <summary>
-/// A shortcut and a status readout next to the clock. It no longer hides the
-/// window: closing the window quits DropLink, and minimizing leaves it in the
-/// taskbar where a normal program belongs.
+/// Keeps background receiving accessible after the window is closed.
 /// </summary>
 internal sealed class TrayIcon : IDisposable
 {
@@ -18,14 +17,34 @@ internal sealed class TrayIcon : IDisposable
     private readonly Forms.NotifyIcon icon;
     private readonly Forms.ToolStripMenuItem statusItem;
     private readonly Forms.ToolStripMenuItem pauseItem;
+    private readonly System.Drawing.Text.PrivateFontCollection menuFonts = new();
+    private readonly Font? menuFont;
 
     public TrayIcon(Window window, Action exit, Action openSettings, Action togglePause, Func<bool> isPaused)
     {
         this.window = window;
         // The first item restates the header, so a right-click answers "还在收吗"
         // without opening anything. It is disabled: it is a readout, not a verb.
-        statusItem = new Forms.ToolStripMenuItem("状态：正在启动") { Enabled = false };
-        var menu = new Forms.ContextMenuStrip { ShowImageMargin = false };
+        statusItem = new Forms.ToolStripMenuItem("正在启动") { Enabled = false };
+        var fontPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "msyh.ttc");
+        if (File.Exists(fontPath))
+        {
+            try
+            {
+                menuFonts.AddFontFile(fontPath);
+                var family = menuFonts.Families.FirstOrDefault();
+                if (family is not null) menuFont = new Font(family, 9f, System.Drawing.FontStyle.Regular);
+            }
+            catch (Exception error) { AppLog.Write("tray font: " + error.Message); }
+        }
+        var menu = new Forms.ContextMenuStrip
+        {
+            ShowImageMargin = false,
+            Padding = new Forms.Padding(5),
+            Font = menuFont ?? System.Drawing.SystemFonts.MessageBoxFont!,
+            Renderer = Forms.SystemInformation.HighContrast
+                ? new Forms.ToolStripSystemRenderer() : new TrayMenuRenderer()
+        };
         var open = new Forms.ToolStripMenuItem("打开 DropLink");
         open.Click += (_, _) => ShowWindow();
         pauseItem = new Forms.ToolStripMenuItem("暂停接收");
@@ -36,7 +55,11 @@ internal sealed class TrayIcon : IDisposable
         // top of it - the user read that as "why does settings jump to PowerShell".
         settings.Click += (_, _) => openSettings();
         var folder = new Forms.ToolStripMenuItem("打开接收文件夹");
-        folder.Click += (_, _) => OpenReceiveFolder();
+        folder.Click += async (_, _) =>
+        {
+            try { await SettingsFile.OpenReceiveFolderAsync(); }
+            catch (Exception error) { AppLog.Write("open folder failed: " + error.Message); }
+        };
         var diagnostics = new Forms.ToolStripMenuItem("导出诊断包");
         diagnostics.Click += (_, _) => ExportDiagnostics();
         var quit = new Forms.ToolStripMenuItem("退出 DropLink");
@@ -44,12 +67,15 @@ internal sealed class TrayIcon : IDisposable
         menu.Items.Add(statusItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(open);
-        menu.Items.Add(pauseItem);
         menu.Items.Add(folder);
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add(pauseItem);
         menu.Items.Add(settings);
         menu.Items.Add(diagnostics);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(quit);
+        foreach (Forms.ToolStripItem item in menu.Items)
+            if (item is Forms.ToolStripMenuItem) item.Padding = new Forms.Padding(10, 5, 14, 5);
 
         icon = new Forms.NotifyIcon
         {
@@ -59,6 +85,7 @@ internal sealed class TrayIcon : IDisposable
             ContextMenuStrip = menu
         };
         icon.DoubleClick += (_, _) => ShowWindow();
+        icon.BalloonTipClicked += (_, _) => ShowWindow();
         SetPaused(isPaused());
     }
 
@@ -91,7 +118,7 @@ internal sealed class TrayIcon : IDisposable
         var tip = status.Length <= room ? status : status[..(room - 1)] + "…";
         try { icon.Text = prefix + tip; }
         catch (Exception) { /* keep the previous tooltip */ }
-        try { statusItem.Text = "状态：" + status; }
+        try { statusItem.Text = status; }
         catch (Exception) { /* keep the previous menu text */ }
     }
 
@@ -172,16 +199,6 @@ internal sealed class TrayIcon : IDisposable
         return SystemIcons.Application;
     }
 
-    private static void OpenReceiveFolder()
-    {
-        var folder = SettingsFile.ReceiveFolder();
-        Directory.CreateDirectory(folder);
-        Process.Start(new ProcessStartInfo("explorer.exe", "\"" + folder + "\"")
-        {
-            UseShellExecute = true
-        });
-    }
-
     // Runs the settings tool off the UI thread: it zips logs plus a doctor
     // snapshot, then tells the user where it landed and opens the folder.
     private void ExportDiagnostics()
@@ -255,7 +272,39 @@ internal sealed class TrayIcon : IDisposable
         // it belongs in the log, not in a dialog over a closing window.
         try { icon.Visible = false; }
         catch (Exception error) { AppLog.WriteException("tray: hide", error); }
-        try { icon.Dispose(); }
+        try { icon.ContextMenuStrip?.Dispose(); icon.Dispose(); }
         catch (Exception error) { AppLog.WriteException("tray: dispose", error); }
+        menuFont?.Dispose();
+        menuFonts.Dispose();
+    }
+
+    private sealed class TrayMenuRenderer : Forms.ToolStripSystemRenderer
+    {
+        protected override void OnRenderToolStripBackground(Forms.ToolStripRenderEventArgs e)
+            => e.Graphics.Clear(Color.White);
+
+        protected override void OnRenderMenuItemBackground(Forms.ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected || !e.Item.Enabled) return;
+            var bounds = new RectangleF(1, 1, e.Item.Width - 2, e.Item.Height - 2);
+            using var fill = new SolidBrush(Color.FromArgb(234, 242, 254));
+            e.Graphics.FillRoundedRectangle(fill, bounds, new SizeF(5, 5));
+        }
+
+        protected override void OnRenderItemText(Forms.ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = !e.Item.Enabled ? Color.FromArgb(94, 104, 118)
+                : e.Item.Selected ? Color.FromArgb(16, 90, 174) : Color.FromArgb(23, 33, 43);
+            using var brush = new SolidBrush(e.TextColor);
+            using var format = new StringFormat { LineAlignment = StringAlignment.Center };
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            e.Graphics.DrawString(e.Text, e.TextFont ?? e.Item.Font, brush, e.TextRectangle, format);
+        }
+
+        protected override void OnRenderSeparator(Forms.ToolStripSeparatorRenderEventArgs e)
+        {
+            using var pen = new Pen(Color.FromArgb(225, 229, 235));
+            e.Graphics.DrawLine(pen, 8, e.Item.Height / 2, e.Item.Width - 8, e.Item.Height / 2);
+        }
     }
 }

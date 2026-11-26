@@ -73,6 +73,14 @@ $icon = Join-Path $repo 'src\DropLink\app.ico'
 $art = Join-Path $repo 'tools\icon-source.png'
 if (Test-Path -LiteralPath $icon) {
     Copy-Item -LiteralPath $icon -Destination (Join-Path $Target 'DropLink.ico') -Force
+    Add-Type -AssemblyName System.Drawing
+    $frame = [System.Drawing.Icon]::new($icon, 64, 64)
+    try {
+        $bitmap = $frame.ToBitmap()
+        try {
+            $bitmap.Save((Join-Path $Target 'DropLink-toast.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+        } finally { $bitmap.Dispose() }
+    } finally { $frame.Dispose() }
 }
 if (Test-Path -LiteralPath $art) {
     Copy-Item -LiteralPath $art -Destination (Join-Path $Target 'icon-source.png') -Force
@@ -86,6 +94,9 @@ if (Test-Path -LiteralPath $art) {
 $packageRoot = Split-Path -Parent $Target
 $runtimeBackend = Join-Path $packageRoot 'backend'
 if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
+    $defaultsDir = Join-Path $packageRoot 'data'
+    [IO.Directory]::CreateDirectory($defaultsDir) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repo 'tools\portable\data\settings.default.json') -Destination $defaultsDir -Force
     $scriptSource = Join-Path $repo 'tools\portable\backend\airdrop'
     $scriptTarget = Join-Path $runtimeBackend 'airdrop'
     if (Test-Path -LiteralPath $scriptSource) {
@@ -94,6 +105,8 @@ if (Test-Path -LiteralPath (Join-Path $runtimeBackend 'airbridge_radio.exe')) {
         }
         $copied = 0
         foreach ($item in Get-ChildItem -LiteralPath $scriptSource -File) {
+            # Toast helpers can leave diagnostic logs beside the source scripts.
+            if ($item.Extension -notin @('.py', '.ps1', '.vbs')) { continue }
             Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $scriptTarget $item.Name) -Force
             $copied++
         }

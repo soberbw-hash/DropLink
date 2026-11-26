@@ -13,7 +13,6 @@ import argparse
 import contextlib
 import errno
 import http.client
-import itertools
 import ipaddress
 import os
 import json
@@ -304,13 +303,14 @@ def notify_received(folder, names, live=None, batch=None):
     threading.Thread(target=_run, name='toast', daemon=True).start()
 
 
-def notify_failed(reason):
-    """Say so when a transfer never finishes, in the user's words.
+def failure_toast_text(reason):
+    if str(reason or '').startswith('storage failed:'):
+        return '文件保存失败', '请检查保存位置后重试。'
+    return '传输未完成', '请在 iPhone 上重新发送。'
 
-    No buttons: there is nothing to open and nothing to copy. The technical
-    reason is kept, because "it stopped" with no reason is what made this look
-    like a mystery in the first place.
-    """
+
+def notify_failed(reason):
+    """Keep technical detail in the lost event and receiver log."""
     def _run():
         try:
             import base64
@@ -319,16 +319,11 @@ def notify_failed(reason):
                 return
             def b64(text):
                 return base64.b64encode(str(text).encode('utf-8')).decode('ascii') or '~'
-            detail = str(reason or '').strip()
-            if len(detail) > 160:
-                detail = detail[:157] + '…'
-            message = '手机那边中断了，可以在手机上重新点一次这台电脑。'
-            if detail:
-                message += '\n（原因：' + detail + '）'
+            title, message = failure_toast_text(reason)
             args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                     '-File', script,
                     '-FolderB64', b64('~'),
-                    '-TitleB64', b64('这次没传完'),
+                    '-TitleB64', b64(title),
                     '-MessageB64', b64(message),
                     '-NoActions']
             creation = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
@@ -361,11 +356,11 @@ class Incoming(receiver.Watcher):
         self.settings = settings
         self._lock = threading.Lock()
         self._waiting = {}
-        self._keys = (f'r{number}' for number in itertools.count(1))
 
     def _open(self, sender_name, model, files, links, waits):
         with self._lock:
-            key = next(self._keys)
+            # History and notification buttons outlive the receiver process.
+            key = 'r' + secrets.token_hex(16)
             if waits:
                 # Before the request is said: its answer may come back at once.
                 self._waiting[key] = {'made': threading.Event(), 'accept': False}
@@ -402,6 +397,7 @@ class Incoming(receiver.Watcher):
         self.events.say('answered', id=accepted.key, how=how)
         if how != 'accepted':
             return None
+        accepted.folder = self.settings.dest
         if not links:
             due = threading.Timer(UPLOAD_DUE_SECONDS, self._overdue, [accepted])
             due.daemon = True
@@ -447,7 +443,8 @@ class Incoming(receiver.Watcher):
             return None
         accepted.uploading = True
         accepted.total = total or accepted.total
-        accepted.folder = self.settings.dest
+        if accepted.folder is None:
+            accepted.folder = self.settings.dest
         self.events.say('incoming', id=accepted.key, done=0, total=accepted.total)
         return accepted
 
@@ -510,7 +507,9 @@ class Receiving:
         """Whether the receiver runs now. A port held by another program is
         reported and tried again by the caller."""
         if self.server:
-            return True
+            if self.thread.is_alive():
+                return self.ensure_announcement(index, address)
+            self.stop('listener_stopped')
         self.settings.interface_index = index
         try:
             server = receiver.Receiver(self.settings.port, self.settings, self.watcher, proxy=self.proxy)
@@ -525,21 +524,30 @@ class Receiving:
         self.thread = threading.Thread(target=server.serve_forever, name='receiver',
                                        daemon=True)
         self.thread.start()
+        logging.info('listening as %s on port %d into %s', self.settings.name,
+                     self.settings.port, self.settings.dest)
+        return self.ensure_announcement(index, address)
+
+    def ensure_announcement(self, index, address):
         if self.proxy or not self.loopback:
+            if self.announcer is not None:
+                if self.announcer.thread.is_alive():
+                    return True
+                self._say(False, 'announcement_stopped')
+                self.announcer.stop()
+                self.announcer = None
             service_id = (receiver.stable_service_id(address, self.keys)
                           if self.proxy else secrets.token_hex(6))
             try:
                 service = mdns.Service(receiver.SERVICE_TYPE, service_id, f'{service_id}.local',
                                        address, self.settings.port, f'flags={self.settings.flags}')
-                self.announcer = (receiver.ProxyAnnouncer(service, self.proxy_port, self.keys)
-                                  if self.proxy else mdns.Announcer(service, index))
-                self.announcer.start()
+                announcer = (receiver.ProxyAnnouncer(service, self.proxy_port, self.keys)
+                             if self.proxy else mdns.Announcer(service, index))
+                announcer.start()
+                self.announcer = announcer
             except OSError as error:
-                self.stop()
                 self._say(False, str(error))
                 return False
-        logging.info('receiving as %s on port %d into %s', self.settings.name,
-                     self.settings.port, self.settings.dest)
         self._say(True)
         return True
 
@@ -854,7 +862,7 @@ class Engine:
                 current = found
                 next_bind = 0.0
                 self.events.say('link', up=bool(found))
-            if found and not self.receiving.server and time.monotonic() >= next_bind:
+            if found and time.monotonic() >= next_bind:
                 next_bind = time.monotonic() + BIND_RETRY_SECONDS
                 self.receiving.start(*found)
             self.stopping.wait(LINK_POLL_SECONDS)
@@ -883,7 +891,15 @@ class Engine:
                 refused['ask'] = 'confirmation required in proxy mode'
             else:
                 self.settings.ask = bool(command['ask'])
-        self.events.say('settings', refused=refused, **self.settings.public())
+        if 'auto_receive' in command:
+            value = command['auto_receive']
+            if type(value) is not bool or load_settings().get('auto_receive') is not value:
+                refused['auto_receive'] = 'saved preference does not match'
+            else:
+                self.settings.ask = not value
+                self.settings.auto_receive = value
+        self.events.say('settings', request_id=command.get('request_id'), refused=refused,
+                        **self.settings.public())
 
     def handle(self, command):
         """Carry out one command; False for the one that ends the engine."""

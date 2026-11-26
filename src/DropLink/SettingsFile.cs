@@ -97,4 +97,12 @@ internal static class SettingsFile
         return System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "DropLink");
     }
+    internal static Task OpenReceiveFolderAsync() => Task.Run(() =>
+    {
+        var folder = Directory.CreateDirectory(ReceiveFolder()).FullName;
+        using var opened = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(folder)
+        {
+            UseShellExecute = true, Verb = "open"
+        });
+    });
 }

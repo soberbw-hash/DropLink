@@ -48,18 +48,10 @@ function Ensure-Aumid {
         if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
         New-ItemProperty -Path $key -Name 'DisplayName' -Value 'DropLink' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $key -Name 'IconBackgroundColor' -Value 'FF1F6FEB' -PropertyType String -Force | Out-Null
-        # Point at the .ico, not the exe. The shell caches a resolved icon per
-        # path, so an IconUri that keeps pointing at DropLink.exe keeps serving
-        # the icon it cached the first time that path was seen - which is how a
-        # rebuilt app went on showing its old download-arrow icon in every
-        # notification while the tray and the window were already correct.
+        # Both the host and the toast script register the same header image.
         $app = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-        $ico = Join-Path $app 'app\DropLink.ico'
-        $exe = Join-Path $app 'app\DropLink.exe'
-        $wanted = if (Test-Path -LiteralPath $ico) { $ico }
-                  elseif (Test-Path -LiteralPath $exe) { $exe }
-                  else { '' }
-        if ($wanted) {
+        $wanted = Join-Path $app 'app\DropLink-toast.png'
+        if (Test-Path -LiteralPath $wanted) {
             $current = ''
             try { $current = [string](Get-ItemProperty -Path $key -Name 'IconUri' -ErrorAction Stop).IconUri } catch { }
             if ($current -ne $wanted) {
@@ -165,7 +157,7 @@ try {
     if (-not $clipLbl) { $clipLbl = 'Copy to clipboard' }
 
     Ensure-Aumid
-    Ensure-Protocol
+    if (-not $NoActions) { Ensure-Protocol }
 
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
     $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
@@ -177,10 +169,12 @@ try {
     # URIs contain '&' which must not be hand-spliced into XML. Build a plain
     # skeleton, then set every attribute through the DOM API so escaping is
     # handled by Windows.
-    $doc.LoadXml('<toast><visual><binding template="ToastGeneric"><text/><text/></binding></visual><actions><action/><action/></actions></toast>')
+    $doc.LoadXml('<toast><visual><binding template="ToastGeneric"><text hint-maxLines="1"/><text hint-maxLines="1"/></binding></visual><actions><action/><action/></actions></toast>')
     $root = $doc.DocumentElement
-    $root.SetAttribute('activation', 'protocol')
-    $root.SetAttribute('launch', $openUri)
+    if (-not $NoActions) {
+        $root.SetAttribute('activationType', 'protocol')
+        $root.SetAttribute('launch', $openUri)
+    }
     $root.SetAttribute('duration', 'long')
     $texts = $doc.GetElementsByTagName('text')
     $texts.Item(0).InnerText = $title

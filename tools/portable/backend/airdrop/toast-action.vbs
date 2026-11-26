@@ -13,15 +13,30 @@
 ' Pure ASCII; all real text is UTF-8 base64url inside the URI.
 Option Explicit
 
-Dim uri, here, shell, ps
-If WScript.Arguments.Count < 1 Then WScript.Quit 0
+Dim uri, here, shell, ps, fs, valid, route, hits, python, worker, code
+If WScript.Arguments.Count <> 1 Then WScript.Quit 1
 uri = WScript.Arguments(0)
-
+Set valid = New RegExp
+valid.Pattern = "^droplink:(open|clip)\?[a-zA-Z0-9_=&/?+-]*$"
+valid.IgnoreCase = True
+If Not valid.Test(uri) Then WScript.Quit 1
 Set shell = CreateObject("WScript.Shell")
-here = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-ps = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-' 0 = hidden window, False = do not wait. The worker still does the real work
-' (base64url decode, clipboard, explorer), it just cannot be seen starting up.
-shell.Run """" & ps & """ -NoProfile -ExecutionPolicy Bypass -File """ & _
-          here & "\toast-action.ps1"" """ & uri & """", 0, False
+Set fs = CreateObject("Scripting.FileSystemObject")
+here = fs.GetParentFolderName(WScript.ScriptFullName)
+Set route = New RegExp
+route.Pattern = "^droplink:open\?batch=([a-zA-Z0-9_-]+={0,2})(&|$)"
+route.IgnoreCase = True
+Set hits = route.Execute(uri)
+If hits.Count > 0 Then
+    python = fs.BuildPath(fs.GetParentFolderName(here), "python\pythonw.exe")
+    worker = fs.BuildPath(here, "open_batch.py")
+    If fs.FileExists(python) And fs.FileExists(worker) Then
+        code = shell.Run(Quote(python) & " -I -B " & Quote(worker) & " " & Quote(hits(0).SubMatches(0)), 0, True)
+        If code = 0 Then WScript.Quit 0
+    End If
+End If
+ps = fs.BuildPath(fs.GetSpecialFolder(0), "System32\WindowsPowerShell\v1.0\powershell.exe")
+shell.Run Quote(ps) & " -NoProfile -ExecutionPolicy Bypass -File " & Quote(here & "\toast-action.ps1") & " " & Quote(uri), 0, False
+Function Quote(value)
+    Quote = Chr(34) & value & Chr(34)
+End Function

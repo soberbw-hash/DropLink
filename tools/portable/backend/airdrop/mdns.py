@@ -246,7 +246,7 @@ class Service:
         return {name.lower() for name in
                 (self.type_name, self.instance_name, self.host_name)}
 
-    def response(self, alive=True):
+    def response(self, alive=True, retiring_instance=None):
         """One unsolicited response carrying every record. `alive=False`
         gives the goodbye form, with all lifetimes zero."""
         service_ttl = TTL_SERVICE if alive else 0
@@ -266,6 +266,11 @@ class Service:
             _record(self.host_name, TYPE_NSEC, unique, host_ttl,
                     encode_name(self.host_name) + HOST_TYPES),
         ]
+        if retiring_instance is not None and retiring_instance != self.instance_name:
+            # A browser that missed the standalone goodbye learns which exact
+            # PTR to retire in the same packet that introduces the replacement.
+            records.append(_record(self.type_name, TYPE_PTR, CLASS_IN, 0,
+                                   encode_name(retiring_instance)))
         return struct.pack('!HHHHHH', 0, RESPONSE_FLAGS, 0, len(records), 0, 0) + b''.join(records)
 
 

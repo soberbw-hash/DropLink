@@ -29,7 +29,31 @@ public partial class MainWindow : Window
     private SetupWindow? setupWindow;
     private bool exitRequested;
     private bool initialized;
+    private readonly SemaphoreSlim deviceChange = new(0, 1);
+    private readonly DispatcherTimer topologyTimer = new() { Interval = TimeSpan.FromMilliseconds(450) };
+    private string? activeDevice;
+    private bool checkingTopology;
     private bool starting;
+    private bool receiverReady;
+    private long readySince;
+    private TaskCompletionSource<bool> readySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private void SetReceiverReady(bool value)
+    {
+        if (receiverReady == value) return;
+        if (value)
+        {
+            readySince = Environment.TickCount64;
+            readySignal.TrySetResult(true);
+        }
+        else
+        {
+            if (Environment.TickCount64 - readySince >= TimeSpan.FromMinutes(2).TotalMilliseconds)
+                restartAttempts = 0;
+            readySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        receiverReady = value;
+    }
     private bool paused;
     private int restartAttempts;
     private bool restartScheduled;
@@ -70,6 +94,12 @@ public partial class MainWindow : Window
         UpdateRecentEmpty();
         RestoreWindowBounds();
         if (previewOnly) return;
+        SourceInitialized += (_, _) =>
+        {
+            var source = (System.Windows.Interop.HwndSource)PresentationSource.FromVisual(this)!;
+            source.AddHook(DeviceMessage);
+        };
+        topologyTimer.Tick += async (_, _) => await TopologyChangedAsync();
         Loaded += async (_, _) => await InitializeAsync();
         Closing += OnClosing;
         Closed += async (_, _) =>
@@ -175,6 +205,8 @@ public partial class MainWindow : Window
     {
         if (initialized) return;
         initialized = true;
+        // The tray-only startup never shows the window but still needs device broadcasts.
+        new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
         try { EnsureTray(); } catch (Exception) { /* tray is best-effort */ }
         await CheckReadinessAsync();
         if (session is not null) return;
@@ -184,13 +216,13 @@ public partial class MainWindow : Window
         {
             if (attempt > 0)
             {
-                await Task.Delay(TimeSpan.FromSeconds(20));
+                await deviceChange.WaitAsync(TimeSpan.FromSeconds(20));
                 await CheckReadinessAsync();
             }
             if (paused || currentStep != GuideStep.StartReceiving) continue;
             await StartReceiveAsync(silent: true);
         }
-        if (session is not null && !IsVisible)
+        if (receiverReady && !IsVisible)
             tray?.Notify("DropLink 已在后台接收", "iPhone 隔空投送里选这台电脑就能投。");
         // Keep watching for a card that is plugged in later. This is what makes
         // "拔了再插回来" recover without the user reopening anything.
@@ -209,7 +241,8 @@ public partial class MainWindow : Window
         }
         try
         {
-            var page = new SettingsWindow(ApplyDeviceNameAsync, ApplyReceiveFolderAsync, ClearHistory);
+            var page = new SettingsWindow(ApplyDeviceNameAsync, folder => ApplyEngineSettingAsync("folder", folder),
+                applyAutoReceive: enabled => ApplyEngineSettingAsync("auto_receive", enabled));
             if (IsVisible)
             {
                 page.Owner = this;
@@ -264,25 +297,12 @@ public partial class MainWindow : Window
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettingsWindow();
 
-    /// <summary>
-    /// A new save folder only takes effect in a new engine process, so the
-    /// session is restarted. Files already received stay where they are.
-    /// </summary>
-    private async Task<bool> ApplyReceiveFolderAsync(string folder)
+    private async Task<bool> ApplyEngineSettingAsync(string key, object value)
     {
-        AppLog.Write("receive folder changed to " + folder);
-        if (session is null) return false;
-        try
-        {
-            await CloseSessionAsync();
-            await StartReceiveAsync(silent: true);
-            return session is not null;
-        }
-        catch (Exception error)
-        {
-            AppLog.Write("restart for new folder failed: " + error.Message);
-            return false;
-        }
+        var current = session;
+        if (current is null) return false;
+        await current.ApplySettingAsync(key, value);
+        return current == session;
     }
 
     // Also reached from the settings page, where clearing is deliberate and
@@ -310,23 +330,46 @@ public partial class MainWindow : Window
     {
         SaveWindowBounds();
         if (exitRequested) return;
-        // × quits, which is what × does everywhere. It used to hide in the tray,
-        // so the receiver kept running with nothing on screen saying so.
-        if (transfers.Items.Any(row => row.Stage == TransferStage.Receiving))
-        {
-            var answer = MessageBox.Show(this,
-                "正在接收文件。现在退出会中断这次传输。\n\n仍要退出？",
-                "退出 DropLink", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) { e.Cancel = true; return; }
-        }
+        if (tray is null) { e.Cancel = true; RequestExit(); return; }
         e.Cancel = true;
-        RequestExit();
+        ShowCloseChoice();
+    }
+
+    private void ShowCloseChoice()
+    {
+        MainContent.IsEnabled = false;
+        CloseHint.Text = transfers.Active is null ? "留在后台可继续接收文件。" : "正在接收文件，退出会中断本次传输。";
+        CloseChoice.Visibility = Visibility.Visible;
+        BackgroundButton.Focus();
+    }
+
+    private void DismissCloseChoice()
+    {
+        CloseChoice.Visibility = Visibility.Collapsed;
+        MainContent.IsEnabled = true;
+        SettingsButton.Focus();
+    }
+
+    private void CancelClose_Click(object sender, RoutedEventArgs e) => DismissCloseChoice();
+
+    private void CloseChoice_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Escape) { e.Handled = true; DismissCloseChoice(); }
+    }
+
+    private void Exit_Click(object sender, RoutedEventArgs e) => RequestExit();
+
+    private void Background_Click(object sender, RoutedEventArgs e)
+    {
+        DismissCloseChoice();
+        Hide();
     }
 
     private async void RequestExit()
     {
         if (exitRequested) return;
         exitRequested = true;
+        topologyTimer.Stop();
         App.ShuttingDown = true;
         // Last resort: a shutdown that hangs on a wedged backend leaves a
         // process with no window that still holds the single-instance lock.
@@ -354,10 +397,12 @@ public partial class MainWindow : Window
     {
         if (session is not null) throw new InvalidOperationException("接收会话已经启动。");
         var created = new ReceiverSession();
-        created.EngineEvent += OnEngineEvent;
-        created.Failed += OnSessionFailed;
-        created.Stage += OnSessionStage;
-        created.Notice += OnSessionNotice;
+        created.EngineEvent += message => OnEngineEvent(created, message);
+        created.Failed += message => OnSessionFailed(created, message);
+        created.Stage += message => OnSessionStage(created, message);
+        created.Notice += message => OnSessionNotice(created, message);
+        readySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        activeDevice = selectedInstance;
         session = created;
         try
         {
@@ -366,11 +411,12 @@ public partial class MainWindow : Window
             // A pause survives a restart: the user asked for quiet, and coming
             // back online un-paused would answer requests they declined.
             if (paused) await created.SetPausedAsync(true);
+            _ = MonitorInitialReadinessAsync(created, readySignal.Task);
         }
         catch
         {
             await created.DisposeAsync();
-            session = null;
+            if (session == created) { session = null; SetReceiverReady(false); readySignal.TrySetResult(false); }
             throw;
         }
     }
@@ -378,14 +424,26 @@ public partial class MainWindow : Window
     private async Task CloseSessionAsync()
     {
         var current = session;
+        SetReceiverReady(false);
+        readySignal.TrySetResult(false);
         session = null;
         if (current is not null) await current.DisposeAsync();
     }
 
-    private void OnSessionFailed(string message) =>
+    private async Task MonitorInitialReadinessAsync(ReceiverSession source, Task<bool> signal)
+    {
+        try { await signal.WaitAsync(TimeSpan.FromSeconds(30)); }
+        catch (TimeoutException)
+        {
+            if (session == source && !receiverReady && !exitRequested)
+                OnSessionFailed(source, "等待接收服务和发现广播就绪超时。");
+        }
+    }
+
+    private void OnSessionFailed(ReceiverSession source, string message) =>
         _ = Dispatcher.BeginInvoke(async () =>
         {
-            if (exitRequested) return;
+            if (session != source || exitRequested) return;
             failure = "接收中断了，正在自动恢复";
             failureHint = message;
             AppLog.Write("session failed: " + message);
@@ -396,7 +454,7 @@ public partial class MainWindow : Window
             Render();
             // No modal box: a receiver that needs a click to keep recovering is
             // a receiver that stays down while nobody is at the desk.
-            if (!IsVisible) tray?.Notify("DropLink 接收中断", message);
+
             ScheduleRestart(message);
         });
 
@@ -446,20 +504,17 @@ public partial class MainWindow : Window
     // receiving, so a healthy receiver never pays for it.
     private async Task WatchForDeviceAsync()
     {
-        if (watchRunning) return;
+        if (watchRunning || restartScheduled || starting) return;
         watchRunning = true;
         try
         {
             AppLog.Write("watching for a usable radio");
-            // Each round runs a PowerShell PnP query plus a backend probe, so a
-            // flat ten-second beat meant paying that forever on a machine whose
-            // card is simply unplugged. Back off to a minute: a card that gets
-            // plugged in is still noticed within it, and an idle window stops
-            // spawning processes while nobody is watching.
+            // Device-change messages wake this immediately. The slower check
+            // also covers drivers that omit a topology notification.
             var wait = TimeSpan.FromSeconds(10);
             while (!exitRequested && !paused && session is null)
             {
-                await Task.Delay(wait);
+                await deviceChange.WaitAsync(wait);
                 if (exitRequested || paused || session is not null) return;
                 await CheckReadinessAsync();
                 if (currentStep != GuideStep.StartReceiving)
@@ -467,8 +522,7 @@ public partial class MainWindow : Window
                     wait = TimeSpan.FromSeconds(Math.Min(wait.TotalSeconds * 2, 60));
                     continue;
                 }
-                restartAttempts = 0;
-                await StartReceiveAsync(silent: true);
+                if (!restartScheduled) await StartReceiveAsync(silent: true);
                 return;
             }
         }
@@ -476,36 +530,80 @@ public partial class MainWindow : Window
         finally { watchRunning = false; }
     }
 
+    private IntPtr DeviceMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        // DBT_DEVNODES_CHANGED is broadcast to top-level windows on a topology change.
+        if (message == 0x0219 && wParam.ToInt64() == 7 && !exitRequested)
+        {
+            topologyTimer.Stop();
+            topologyTimer.Start();
+        }
+        return IntPtr.Zero;
+    }
+
+    private async Task TopologyChangedAsync()
+    {
+        topologyTimer.Stop();
+        if (checkingTopology) { topologyTimer.Start(); return; }
+        if (exitRequested || paused) return;
+        if (deviceChange.CurrentCount == 0) deviceChange.Release();
+        var current = session;
+        if (current is null)
+        {
+            if (!starting && !restartScheduled) _ = WatchForDeviceAsync();
+            return;
+        }
+        if (activeDevice is null || starting) return;
+        checkingTopology = true;
+        try
+        {
+            var devices = await ReadinessProbe.DevicesAsync();
+            if (current == session && !exitRequested && !devices.Any(d => ReadinessProbe.IsReadyCard(d)
+                && string.Equals(d.InstanceId, activeDevice, StringComparison.OrdinalIgnoreCase)))
+                OnSessionFailed(current, "接收网卡已断开。");
+        }
+        catch (Exception error) { AppLog.Write("USB change check: " + error.Message); }
+        finally { checkingTopology = false; }
+    }
+
     private bool watchRunning;
 
-    private void OnSessionStage(string message) =>
+    private void OnSessionStage(ReceiverSession source, string message) =>
         _ = Dispatcher.BeginInvoke(() =>
         {
+            if (session != source || exitRequested) return;
             lastStage = message;
             if (transfers.Active is null && failure is null) Render();
         });
 
-    private void OnSessionNotice(string message) =>
+    private void OnSessionNotice(ReceiverSession source, string message) =>
         _ = Dispatcher.BeginInvoke(() =>
         {
+            if (session != source || exitRequested) return;
             AppLog.Write("notice: " + message);
             if (transfers.Active is not null) return;
             if (IsVisible) { failureHint = message; Render(); }
-            else tray?.Notify("DropLink 自动恢复", message);
+
         });
 
     // ── engine events ──────────────────────────────────────────────────────
 
-    private void OnEngineEvent(JsonElement message) =>
+    private void OnEngineEvent(ReceiverSession source, JsonElement message) =>
         _ = Dispatcher.BeginInvoke(() =>
         {
+            if (session != source || exitRequested) return;
             if (!message.TryGetProperty("event", out var kindProperty)) return;
             var kind = kindProperty.GetString();
 
             var item = transfers.Apply(message);
             if (item is not null)
             {
-                if (kind == "transfer_created") confirmId = item.RequiresConfirmation ? item.Id : null;
+                if (kind == "transfer_created" && item.RequiresConfirmation)
+                {
+                    confirmId = item.Id;
+                    if (!IsVisible || WindowState == WindowState.Minimized)
+                        tray?.Notify("有新的隔空投送", "点此选择接收或拒绝。");
+                }
                 if (item.IsFinished) confirmId = null;
                 if (kind == "stored") RecordStored(message, item);
                 transfers.Trim();
@@ -523,6 +621,8 @@ public partial class MainWindow : Window
                 // be a guess.
                 case "receiving":
                     var live = message.TryGetProperty("on", out var on) && on.ValueKind == JsonValueKind.True;
+                    SetReceiverReady(live);
+                    if (live) currentStep = GuideStep.Receiving;
                     if (!live)
                     {
                         failure = "接收服务没有打开";
@@ -695,11 +795,11 @@ public partial class MainWindow : Window
         if (active is not null) return active.Stage == TransferStage.Awaiting ? UiState.Confirming : UiState.Transferring;
         if (paused) return UiState.Paused;
         if (failure is not null) return UiState.Failed;
-        if (doneBanner) return UiState.Done;
+        if (doneBanner && receiverReady) return UiState.Done;
         if (supportedCards == 0 && guide is not null) return UiState.NoDevice;
         if (currentStep is GuideStep.SwitchDriver or GuideStep.Rescan or GuideStep.EnvironmentBlocked or GuideStep.NeedRestart)
             return UiState.Setup;
-        if (starting || currentStep is GuideStep.Starting or GuideStep.Checking) return UiState.Preparing;
+        if (!receiverReady || starting || currentStep is GuideStep.Starting or GuideStep.Checking) return UiState.Preparing;
         return UiState.Waiting;
     }
 
@@ -884,12 +984,18 @@ public partial class MainWindow : Window
     /// </summary>
     internal async Task<(bool Ok, string Message)> VerifyReceivingAsync()
     {
-        if (session is not null)
-            return (true, "接收服务已就绪，iPhone 现在就能找到这台电脑。");
-        await CheckReadinessAsync();
-        if (currentStep == GuideStep.StartReceiving) await StartReceiveAsync(silent: false);
-        if (session is not null)
-            return (true, "接收服务已就绪，iPhone 现在就能找到这台电脑。");
+        if (session is null)
+        {
+            await CheckReadinessAsync();
+            if (currentStep == GuideStep.StartReceiving) await StartReceiveAsync(silent: false);
+        }
+        if (session is not null && !receiverReady)
+        {
+            try { await readySignal.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch (TimeoutException) { return (false, "尚未收到接收服务的就绪确认。"); }
+        }
+        if (receiverReady)
+            return (true, "接收服务已就绪，请在 iPhone 的隔空投送里选择这台电脑。");
         var reason = !string.IsNullOrWhiteSpace(failureHint) ? failureHint
             : !string.IsNullOrWhiteSpace(failure) ? failure
             : guide?.Detail ?? "";
@@ -922,14 +1028,9 @@ public partial class MainWindow : Window
         catch (Exception error) { AppLog.Write("open history row failed: " + error.Message); }
     }
 
-    private void OpenFolder_Click(object sender, RoutedEventArgs e)
+    private async void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        var folder = SettingsFile.ReceiveFolder();
-        try
-        {
-            Directory.CreateDirectory(folder);
-            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + folder + "\"") { UseShellExecute = true });
-        }
+        try { await SettingsFile.OpenReceiveFolderAsync(); }
         catch (Exception error) { AppLog.Write("open folder failed: " + error.Message); }
     }
 
@@ -968,10 +1069,10 @@ public partial class MainWindow : Window
             readyCards = snapshot.ReadyWinUsbCards;
             supportedCards = snapshot.SupportedCards;
 
-            var result = SetupGuide.Evaluate(snapshot.ToGuideInput(session is not null, starting));
+            var result = SetupGuide.Evaluate(snapshot.ToGuideInput(receiverReady, starting || session is not null));
             currentStep = result.Step;
             guide = result;
-            if (currentStep is GuideStep.StartReceiving or GuideStep.Starting or GuideStep.Receiving && failure is not null && session is not null)
+            if (currentStep is GuideStep.StartReceiving or GuideStep.Starting or GuideStep.Receiving && failure is not null && receiverReady)
             {
                 failure = null;
                 failureHint = "";
@@ -1015,7 +1116,6 @@ public partial class MainWindow : Window
                 SettingsFile.ReceiveFolder(),
                 Environment.GetEnvironmentVariable("DROPLINK_KEYS_DIR") ?? "",
                 deviceName, selectedTarget, legacy);
-            restartAttempts = 0;
             await CheckReadinessAsync();
         }
         catch (Exception ex)
@@ -1034,7 +1134,7 @@ public partial class MainWindow : Window
             failure = "接收没能启动（" + stage + "）";
             failureHint = ex.Message;
             Render();
-            if (silent) tray?.Notify("DropLink 没能开始接收", ex.Message);
+
             ScheduleRestart(ex.Message);
         }
         finally
@@ -1056,6 +1156,7 @@ public partial class MainWindow : Window
     {
         supportedCards = 1;
         readyCards = 1;
+        receiverReady = true;
         currentStep = GuideStep.Receiving;
         // Screenshots are committed to the repository, so the machine's own name
         // must never reach them. It used to, because the preview rendered
@@ -1119,10 +1220,10 @@ public partial class MainWindow : Window
                 transfers.Items.Add(ask);
                 break;
         }
-        if (state is "waiting" or "transfer" or "done")
+        if (state is "waiting" or "transfer" or "done" or "close")
         {
             history.Recent.Clear();
-            history.Recent.Add(new HistoryBatch { Id = "p1", At = DateTime.Now.AddSeconds(-20), Folder = SettingsFile.ReceiveFolder(), Files = ["IMG_2841.HEIC"], Bytes = 9_017_344, Kind = "image", Sender = "iPhone" });
+            history.Recent.Add(new HistoryBatch { Id = "p1", At = DateTime.Now.AddSeconds(-20), Folder = SettingsFile.ReceiveFolder(), Files = ["旅行照片_2026_海边日落_IMG_2841_原始影像_全分辨率.HEIC"], Bytes = 9_017_344, Kind = "image", Sender = "iPhone" });
             history.Recent.Add(new HistoryBatch { Id = "p2", At = DateTime.Now.AddMinutes(-12), Folder = SettingsFile.ReceiveFolder(), Files = ["IMG_2840.MOV"], Bytes = 134_637_568, Kind = "video", Sender = "iPhone" });
             history.Recent.Add(new HistoryBatch { Id = "p3", At = DateTime.Now.AddHours(-3), Folder = SettingsFile.ReceiveFolder(), Files = ["a.heic", "b.heic", "c.heic", "d.heic", "e.heic", "f.heic"], Bytes = 44_875_776, Kind = "image", Sender = "iPhone" });
             UpdateRecentEmpty();
@@ -1135,6 +1236,7 @@ public partial class MainWindow : Window
             UpdateRecentEmpty();
         }
         Render();
+        if (state == "close") ShowCloseChoice();
     }
 
 }

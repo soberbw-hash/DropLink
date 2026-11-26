@@ -64,7 +64,7 @@ internal static class SetupGuide
             return new SetupGuideResult(
                 GuideStep.NeedRestart,
                 "需要重新打开一次",
-                "点右上角 × 退出，再重新打开。",
+                "从托盘菜单退出 DropLink，再重新打开。",
                 "重新检查", true);
 
         if (input.SessionRunning)

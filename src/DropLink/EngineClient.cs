@@ -15,6 +15,22 @@ internal sealed class EngineClient : IAsyncDisposable
     private readonly Task exitObserver;
     private readonly SemaphoreSlim writeLock = new(1, 1);
     private int stopping;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> replies = new();
+
+    internal async Task ApplySettingAsync(string key, object value)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var reply = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        replies[id] = reply;
+        try
+        {
+            await SendAsync(new Dictionary<string, object> { ["do"] = "set", ["request_id"] = id, [key] = value });
+            var result = await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (result.GetProperty("refused").TryGetProperty(key, out var reason))
+                throw new InvalidOperationException(reason.GetString());
+        }
+        finally { replies.TryRemove(id, out _); }
+    }
 
     private readonly Action<JsonElement> eventReceived;
     private readonly Action<int> exited;
@@ -104,7 +120,13 @@ internal sealed class EngineClient : IAsyncDisposable
                     using var json = JsonDocument.Parse(line);
                     if (json.RootElement.ValueKind == JsonValueKind.Object &&
                         json.RootElement.TryGetProperty("event", out var value) && value.ValueKind == JsonValueKind.String)
-                        eventReceived(json.RootElement.Clone());
+                    {
+                        var evt = json.RootElement.Clone();
+                        if (value.GetString() == "settings" && evt.TryGetProperty("request_id", out var request)
+                            && request.ValueKind == JsonValueKind.String && replies.TryGetValue(request.GetString()!, out var reply))
+                            reply.TrySetResult(evt);
+                        eventReceived(evt);
+                    }
                 }
                 catch (JsonException)
                 {
@@ -137,6 +159,8 @@ internal sealed class EngineClient : IAsyncDisposable
     {
         await process.WaitForExitAsync().ConfigureAwait(false);
         await eventReader.ConfigureAwait(false);
+        foreach (var reply in replies.Values)
+            reply.TrySetException(new IOException("接收引擎已退出。"));
         if (Volatile.Read(ref stopping) == 0) exited(process.ExitCode);
     }
 

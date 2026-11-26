@@ -18,16 +18,16 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        var fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+        if (File.Exists(Path.Combine(fonts, "msyh.ttc")))
+            Resources["AppFont"] = new System.Windows.Media.FontFamily(
+                new Uri(Path.TrimEndingDirectorySeparator(fonts) + Path.DirectorySeparatorChar),
+                "./#Microsoft YaHei UI");
         StartMinimized = e.Args.Contains("--tray", StringComparer.OrdinalIgnoreCase);
         AppLog.Mark("app:start (tray=" + StartMinimized + ", elevated=" + Elevation.IsElevated() + ")");
         // Self-contained: derive backend/driver paths even if launched by
         // double-clicking the exe with no launcher environment at all.
         AppPaths.EnsureEnvironment();
-        // Before any window or tray icon exists: the shell reads this when the
-        // first window is created, and a later call would leave the taskbar and
-        // notifications on the path-derived identity (with its stale icon).
-        AppIdentity.Apply();
-
         // Dev-only: render the settings page to a PNG and exit, so a layout
         // regression is visible without clicking through the app. Placed before
         // the single-instance and stale-chain logic on purpose: a preview must
@@ -36,6 +36,10 @@ public partial class App : System.Windows.Application
         if (TryPreviewSettings(e.Args)) { Shutdown(); return; }
         if (TryPreviewSetup(e.Args)) { Shutdown(); return; }
         if (TryDiagnose(e.Args)) { Shutdown(); return; }
+
+        // Register only for normal launches. A diagnostic or preview run from
+        // a staging folder must not redirect the installed notification icon.
+        AppIdentity.Apply();
 
         // A portable app that can only be started from a .cmd does not read as
         // a real program. The shortcut is written by the shell itself, so it is
@@ -502,7 +506,9 @@ public partial class App : System.Windows.Application
         {
             var exe = Environment.ProcessPath;
             if (string.IsNullOrWhiteSpace(exe)) return;
-            var link = Path.Combine(AppPaths.PortableRoot(), "启动 DropLink.lnk");
+            var root = AppPaths.PortableRoot();
+            if (string.Equals(root, Path.Combine(Path.GetDirectoryName(exe)!, "runtime"), StringComparison.OrdinalIgnoreCase)) return;
+            var link = Path.Combine(root, "启动 DropLink.lnk");
             if (File.Exists(link)) return;
             CreateShortcut(link, exe);
         }

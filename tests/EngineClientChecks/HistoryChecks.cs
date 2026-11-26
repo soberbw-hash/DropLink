@@ -26,6 +26,13 @@ internal static class HistoryChecks
 
     internal static void Run(string temp)
     {
+        foreach (var (file, stem, ext) in new[] {
+            ("照片.原图.JPG", "照片.原图", ".JPG"), ("README", "README", ""), (".env", ".env", "") })
+        {
+            var row = new HistoryBatch { Files = [file] };
+            Require(row.NameStem == stem && row.Extension == ext && row.Title == file,
+                "history keeps the original filename and reserves the extension");
+        }
         var path = Path.Combine(temp, "history-checks.json");
         if (File.Exists(path)) File.Delete(path);
 

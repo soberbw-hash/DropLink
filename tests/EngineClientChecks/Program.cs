@@ -28,6 +28,8 @@ static string ResolvePython()
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
                 "DropLink", "backend", "python", "python.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "DropLink", "runtime", "backend", "python", "python.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
                 "DropLink-可运行", "backend", "python", "python.exe"),
         };
         foreach (var candidate in candidates)
@@ -140,6 +142,13 @@ CrashBudgetChecks.Run();
         }, code => ready.TrySetException(new Exception($"engine exited: {code}"))))
     {
         var eventData = await ready.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await client.ApplySettingAsync("folder", temp);
+        try
+        {
+            await client.ApplySettingAsync("folder", Path.Combine(temp, "absent"));
+            throw new Exception("engine accepted absent folder");
+        }
+        catch (InvalidOperationException) { /* actual engine refused the folder */ }
         if (!eventData.TryGetProperty("protocol", out _)) throw new Exception("engine did not report a protocol");
         // An ambient data/settings.json may enable auto-receive, which turns the
         // confirmation flag off by design; only assert it when it is expected.

@@ -6,8 +6,7 @@
          windows read the same tokens instead of hard-coding hex per element. -->
     <ResourceDictionary Source="Theme.xaml"/>
    </ResourceDictionary.MergedDictionaries>
-   <!-- HarmonyOS Sans SC (open source, SIL OFL) embedded as resource; works on any PC without installing. -->
-   <FontFamily x:Key="AppFont">pack://application:,,,/Fonts/#HarmonyOS Sans SC</FontFamily>
+   <FontFamily x:Key="AppFont">Segoe UI, Microsoft YaHei UI</FontFamily>
   </ResourceDictionary>
  </Application.Resources>
 </Application>

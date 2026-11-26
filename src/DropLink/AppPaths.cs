@@ -30,12 +30,19 @@ internal static class AppPaths
         var start = new DirectoryInfo(string.IsNullOrWhiteSpace(exe)
             ? AppContext.BaseDirectory
             : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory);
+        return FindRoot(start)?.FullName ?? start.Parent?.FullName ?? start.FullName;
+    }
+
+    private static DirectoryInfo? FindRoot(DirectoryInfo start)
+    {
+        var bundled = new DirectoryInfo(Path.Combine(start.FullName, "runtime"));
+        if (File.Exists(Path.Combine(bundled.FullName, "backend", "airbridge_radio.exe"))) return bundled;
         for (var d = start; d is not null; d = d.Parent)
         {
-            if (File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe"))) return d.FullName;
-            if (Directory.Exists(Path.Combine(d.FullName, "prepared-next"))) return d.FullName;
+            if (File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe")) ||
+                Directory.Exists(Path.Combine(d.FullName, "prepared-next"))) return d;
         }
-        return Directory.GetParent(start.FullName)?.FullName ?? start.FullName;
+        return null;
     }
 
     /// <summary>
@@ -64,12 +71,7 @@ internal static class AppPaths
         var start = new DirectoryInfo(string.IsNullOrWhiteSpace(exe)
             ? AppContext.BaseDirectory
             : Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory);
-        for (var d = start; d is not null; d = d.Parent)
-        {
-            if (File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe"))) return true;
-            if (Directory.Exists(Path.Combine(d.FullName, "prepared-next"))) return true;
-        }
-        return false;
+        return FindRoot(start) is not null;
     }
 
     /// <summary>
@@ -110,16 +112,7 @@ internal static class AppPaths
 
         // Walk up to the folder that directly contains "prepared-next" (the work
         // dir) or "backend" (the portable release layout).
-        DirectoryInfo? work = null;
-        for (var d = start; d is not null; d = d.Parent)
-        {
-            if (Directory.Exists(Path.Combine(d.FullName, "prepared-next")) ||
-                File.Exists(Path.Combine(d.FullName, "backend", "airbridge_radio.exe")))
-            {
-                work = d;
-                break;
-            }
-        }
+        var work = FindRoot(start);
         if (work is null) return;
 
         // Portable release: one flat backend folder next to the app.

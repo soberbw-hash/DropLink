@@ -1,12 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><Version>1.0.1</Version></PropertyGroup>
   <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><ApplicationManifest>app.manifest</ApplicationManifest><ApplicationIcon>app.ico</ApplicationIcon></PropertyGroup>
   <ItemGroup>
     <!-- app.ico is NOT a valid WPF Resource item: the resources generator
          silently drops .ico files, so the tray used to fall back to the exe
          icon without anyone noticing. EmbeddedResource actually embeds it. -->
     <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
-    <Resource Include="Fonts\HarmonyOS_Sans_SC_Regular.ttf" CopyToOutputDirectory="PreserveNewest" />
-    <Resource Include="Fonts\HarmonyOS_Sans_SC_Medium.ttf" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="Fonts\OFL_LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

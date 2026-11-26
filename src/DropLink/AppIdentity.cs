@@ -47,18 +47,18 @@ internal static class AppIdentity
             key.SetValue("DisplayName", "DropLink");
             key.SetValue("IconBackgroundColor", "FF1F6FEB");
 
-            // The .ico, not the exe: the shell caches a resolved icon per path,
-            // and an IconUri that keeps naming DropLink.exe keeps serving the
-            // icon it cached the first time that path was seen.
-            //
-            // Only a real install has the .ico next to the exe. A dev build or
-            // the asInvoker probe runs from somewhere else, and pointing the
-            // live registration at a temp folder would break the shipped app's
-            // icon the next time it starts.
+            // Use the same small raster logo as the toast sender.
             var folder = Path.GetDirectoryName(Environment.ProcessPath ?? "") ?? AppContext.BaseDirectory;
-            var ico = Path.Combine(folder, "DropLink.ico");
-            if (!File.Exists(ico)) return;
-            var wanted = ico;
+            var wanted = Path.Combine(folder, "DropLink-toast.png");
+            if (!File.Exists(wanted)) wanted = Path.Combine(AppPaths.PortableRoot(), "app", "DropLink-toast.png");
+            if (!File.Exists(wanted)) return;
+
+            try
+            {
+                if (Environment.ProcessPath is { } exe)
+                    StartMenuIdentity.Ensure(exe, Environment.GetFolderPath(Environment.SpecialFolder.Programs), Aumid);
+            }
+            catch (Exception error) { AppLog.Write("toast shortcut registration failed: " + error.Message); }
 
             var current = key.GetValue("IconUri") as string;
             if (string.Equals(current, wanted, StringComparison.OrdinalIgnoreCase)) return;
